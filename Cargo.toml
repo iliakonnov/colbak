@@ -4,6 +4,16 @@ version = "0.1.0"
 authors = ["Ilia Konnov <iliakonnov@gmail.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+tokio = {version="0.2", features=["full"]}
+async-trait = "0.1.42"
+time = {version="0.2.23", default-features=false, features=["std", "serde"] }
+os_str_bytes = "2.4"
+walkdir = "2.3"
+tar = "0.4"
+rusoto_core = "0.45.0"
+rusoto_s3 = "0.45.0"
+xxhrs = "2.0"
+rusqlite = "0.24.2"
+serde = "1.0"
+serde_yaml = "0.8"
