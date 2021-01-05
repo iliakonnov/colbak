@@ -56,6 +56,18 @@ pub enum FileKind {
 #[repr(transparent)]
 pub struct Checksum(u128);
 
+impl From<xxhrs::XXH3_128<'_>> for Checksum {
+    fn from(x: xxhrs::XXH3_128) -> Checksum {
+        Checksum(x.finish())
+    }
+}
+
+impl std::fmt::Display for Checksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         f.write_fmt(format_args!("{{{:x}}}", self.0))
+    }
+}
+
 struct Stored<T> {
     stored_at: DateTime,
     etag: String,

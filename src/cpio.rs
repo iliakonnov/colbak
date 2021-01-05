@@ -1,13 +1,10 @@
+use thiserror::*;
 use std::borrow::Cow;
-use std::future::Future;
 use std::mem::size_of;
-use std::pin::Pin;
-use std::task::{Poll, Waker};
-
 use os_str_bytes::OsStrBytes;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::AsyncWrite-;
 
-use crate::FileInfo;
+use crate::{FileInfo, Checksum};
 
 #[derive(Debug)]
 #[repr(C)]
@@ -197,6 +194,18 @@ pub struct Archive {
     files: Vec<(String, FileInfo)>,
 }
 
+#[derive(Error, Debug)]
+pub enum ArchivingError {
+    #[error("something went wrong when performing IO: {0}")]
+    Io(#[from] tokio::io::Error),
+
+    #[error("real hash differs from specified (expected {expected}, found {found})")]
+    HashMismatch {
+        expected: Checksum,
+        found: Checksum,
+    }
+}
+
 impl Archive {
     pub fn new() -> Self {
         Archive {
@@ -207,7 +216,7 @@ impl Archive {
         self.files.push((alias, file));
     }
 
-    pub async fn write<W: AsyncWrite + Unpin>(&self, mut dst: W) -> Result<(), tokio::io::Error> {
+    pub async fn write<W: AsyncWrite + Unpin>(&self, mut dst: W) -> Result<(), ArchivingError> {
         use tokio::io::{AsyncWriteExt, AsyncReadExt};
         use tokio::fs::File;
         let mut buf = [0; 65536];
@@ -218,13 +227,26 @@ impl Archive {
 
             let mut file = File::open(&info.path).await?;
             let mut file_length = 0;
+            let mut hash = xxhrs::XXH3_128::new();
             loop {
                 let len = file.read(&mut buf).await?;
                 if len == 0 {
                     break;
                 }
-                dst.write_all(&buf[..len]).await?;
+                let buf = &buf[..len];
+                dst.write_all(buf).await?;
+                hash.write(buf);
                 file_length += len;
+            }
+
+            let checksum = Checksum::from(hash);
+            if let Some(expected) = info.hash {
+                if expected != checksum {
+                    return Err(ArchivingError::HashMismatch {
+                        expected,
+                        found: checksum
+                    })
+                }
             }
 
             if file_length % 2 != 0 {
