@@ -1,4 +1,5 @@
 #![feature(type_alias_impl_trait)]
+#![cfg_attr(windows, feature(windows_by_handle))]
 
 use std::path::PathBuf;
 use time::OffsetDateTime as DateTime;
@@ -9,7 +10,10 @@ use serde::Deserialize;
 mod fileinfo;
 use fileinfo::FileInfo;
 
+mod strings;
 mod cpio;
+mod collector;
+mod fileext;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -81,15 +85,8 @@ enum Pack {
 }
 
 #[tokio::main]
-async fn main() {
-    use tokio::io::{AsyncWriteExt, AsyncReadExt};
-    use tokio::fs::File;
-    let mut archive = cpio::Archive::new();
-    for i in std::env::args().skip(1) {
-        let path = i.clone().into();
-        let file = FileInfo::new(path).await.unwrap();
-        archive.add(i, file);
-    }
-    let mut file = File::create("test.cpio").await.unwrap();
-    archive.write(file).await.unwrap();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let res = collector::collect("./test")?;
+    println!("{}", res);
+    Ok(())
 }

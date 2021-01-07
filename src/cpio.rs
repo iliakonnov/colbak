@@ -1,10 +1,11 @@
 use thiserror::*;
-use std::borrow::Cow;
 use std::mem::size_of;
-use os_str_bytes::OsStrBytes;
-use tokio::io::AsyncWrite-;
+use tokio::io::AsyncWrite;
 
 use crate::{FileInfo, Checksum};
+use crate::strings::*;
+use std::borrow::Cow;
+use std::path::Path;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -49,59 +50,6 @@ fn convert_timestamp(x: i64) -> [u16; 2] {
     }
 }
 
-fn u32_to_ascii(num: u32) -> [u8; 6] {
-    // To fit into 6 bytes we need at least 41 different chars
-    // For 5 bytes we need 85, but that is too much.
-    let digits = b'0'..b'9'; // 10
-    let upper = b'A'..b'Z'; // 25
-    // 6 more chars:
-    let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
-
-    let alphabet = additional
-        .iter()
-        .copied()
-        .chain(digits)
-        .chain(upper)
-        .rev()
-        .collect::<Vec<u8>>();
-    assert!(alphabet.len() >= 41);
-    let mut result = [alphabet[0]; 6];
-    let mut idx = 0;
-    let mut num = num as usize;
-    while num != 0 {
-        let rem = num % alphabet.len();
-        let div = num / alphabet.len();
-        result[idx] = alphabet[rem];
-        num = div;
-        idx += 1;
-    }
-    result
-}
-
-fn crop_name(name: Cow<[u8]>) -> Cow<[u8]> {
-    let max_length = (u16::MAX as usize) - size_of::<Metadata>() - 1;
-    if name.len() <= max_length {
-        return name;
-    }
-
-    let hash = xxhrs::XXH32::hash(&name);
-    let hash = u32_to_ascii(hash);
-    let ext_start = name.len() - 10;
-    let dot = (&name[ext_start..])
-        .iter()
-        .rposition(|&x| x == b'.')
-        .unwrap_or(name.len());
-    let (name, extension) = name.split_at(dot);
-    let space_available = max_length - extension.len() - hash.len();
-    let name = &name[..space_available];
-    let res = name
-        .iter()
-        .chain(hash.iter())
-        .chain(extension.iter())
-        .copied()
-        .collect::<Vec<u8>>();
-    Cow::Owned(res)
-}
 
 impl CpioHeader {
     fn trailer() -> Vec<u8> {
@@ -149,10 +97,8 @@ impl CpioHeader {
             }
         };
         let mode = mode | (info.mode & (!0o0170000));
-        let name = alias
-            .or(info.path.to_str())
-            .map(|s| Cow::Borrowed(s.as_bytes()))
-            .unwrap_or_else(|| info.path.as_os_str().to_bytes());
+        let name = alias.map(str_to_bytes)
+            .unwrap_or_else(|| Cow::Borrowed(&info.path));
         let name = crop_name(name);
         let namesize = name.len() + size_of::<Metadata>();
 
@@ -198,12 +144,13 @@ pub struct Archive {
 pub enum ArchivingError {
     #[error("something went wrong when performing IO: {0}")]
     Io(#[from] tokio::io::Error),
-
     #[error("real hash differs from specified (expected {expected}, found {found})")]
     HashMismatch {
         expected: Checksum,
         found: Checksum,
-    }
+    },
+    #[error("unable to encode filename: {0}")]
+    InvalidFilename(#[from] os_str_bytes::EncodingError),
 }
 
 impl Archive {
@@ -225,7 +172,9 @@ impl Archive {
             let header = CpioHeader::encode(Some(alias), info);
             dst.write_all(&header).await?;
 
-            let mut file = File::open(&info.path).await?;
+            let real_path = bytes_to_osstr(&info.path)?;
+            let real_path = Path::new(&real_path);
+            let mut file = File::open(real_path).await?;
             let mut file_length = 0;
             let mut hash = xxhrs::XXH3_128::new();
             loop {
@@ -244,8 +193,8 @@ impl Archive {
                 if expected != checksum {
                     return Err(ArchivingError::HashMismatch {
                         expected,
-                        found: checksum
-                    })
+                        found: checksum,
+                    });
                 }
             }
 
