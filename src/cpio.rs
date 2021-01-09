@@ -2,10 +2,11 @@ use thiserror::*;
 use std::mem::size_of;
 use tokio::io::AsyncWrite;
 
-use crate::{FileInfo, Checksum};
+use crate::{Info, Checksum};
 use crate::strings::*;
 use std::borrow::Cow;
 use std::path::Path;
+use crate::fileinfo::UnspecifiedInfo;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -75,22 +76,22 @@ impl CpioHeader {
         res
     }
 
-    fn encode(alias: Option<&str>, info: &FileInfo) -> Vec<u8> {
+    fn encode(alias: Option<&str>, info: &Info) -> Vec<u8> {
         let mode;
         let nlink;
         let filesize;
-        match info.kind {
-            crate::FileKind::File { size } => {
+        match &info.data {
+            UnspecifiedInfo::File(file) => {
                 mode = 0o0100000;
                 nlink = 1;
-                filesize = size;
+                filesize = file.size;
             }
-            crate::FileKind::Directory => {
+            UnspecifiedInfo::Dir(_) => {
                 mode = 0o0040000;
                 nlink = 2;
                 filesize = 0;
             }
-            crate::FileKind::Unknown => {
+            UnspecifiedInfo::Unknown(_) => {
                 mode = 0o0020000;
                 nlink = 0;
                 filesize = 0;
@@ -137,7 +138,7 @@ impl CpioHeader {
 }
 
 pub struct Archive {
-    files: Vec<(String, FileInfo)>,
+    files: Vec<(String, Info)>,
 }
 
 #[derive(Error, Debug)]
@@ -159,7 +160,7 @@ impl Archive {
             files: Vec::new()
         }
     }
-    pub fn add(&mut self, alias: String, file: FileInfo) {
+    pub fn add(&mut self, alias: String, file: Info) {
         self.files.push((alias, file));
     }
 

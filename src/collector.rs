@@ -1,18 +1,20 @@
 use std::path::Path;
 use std::fmt;
-use crate::fileinfo::FileInfo;
+use crate::fileinfo::{Info, FileInfo, DirInfo, InfoKind, UnknownInfo};
 use id_arena::{Arena, Id};
 use thiserror::Error;
 use std::collections::VecDeque;
 use crate::strings::{osstr_to_bytes, bytes_to_osstr};
-use crate::FileKind;
 use crate::fileext::FileExtensions;
+use std::borrow::Cow;
+use std::ffi::OsStr;
 
 
 #[derive(Debug, Clone)]
 pub struct Tree {
     directories: Arena<DirWrap>,
     files: Arena<FileWrap>,
+    others: Vec<Info<UnknownInfo>>,
     root: Id<DirWrap>,
 }
 
@@ -46,14 +48,14 @@ struct DirWrap {
     info: DirectoryInfo,
 }
 
-impl FileInfo {
+impl Info<FileInfo> {
     fn fmt(&self, f: &mut fmt::Formatter, indent: usize) -> fmt::Result {
         let indent = " ".repeat(indent);
         let path = bytes_to_osstr(&self.path)
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|e| format!("{{Err: {}}}", e));
         f.write_fmt(format_args!("{}+ {} {{\n", indent, path))?;
-        f.write_fmt(format_args!("{}    size: {:?}\n", indent, self.size()))?;
+        f.write_fmt(format_args!("{}    size: {:?}\n", indent, self.data.size))?;
         f.write_fmt(format_args!("{}    hash: {:?}\n", indent, self.hash))?;
         f.write_fmt(format_args!("{}}}\n", indent))?;
         Ok(())
@@ -88,12 +90,13 @@ impl DirWrap {
 struct DirectoryInfo {
     name: Vec<u8>,
     size: u64,
+    info: Info<DirInfo>,
 }
 
 #[derive(Debug, Clone)]
 struct FileWrap {
     parent: Id<DirWrap>,
-    info: FileInfo,
+    info: Info<FileInfo>,
 }
 
 #[derive(Debug, Clone, Error)]
@@ -108,6 +111,8 @@ pub enum TreeError {
     FileAlreadyAdded,
     #[error("invalid path provided")]
     InvalidPath,
+    #[error("invalid path provided")]
+    NoDirectoryExists,
 }
 
 impl Tree {
@@ -133,14 +138,14 @@ impl Tree {
     }
 
     /// Sorted by increasing size
-    pub fn by_size(&self, root: Directory) -> Result<Vec<(File, &FileInfo)>, TreeError> {
+    pub fn by_size(&self, root: Directory) -> Result<Vec<(File, &Info<FileInfo>)>, TreeError> {
         let mut files = self.files(root)?;
-        files.sort_unstable_by_key(|x| x.1.size());
+        files.sort_unstable_by_key(|x| x.1.data.size);
         Ok(files)
     }
 
     /// Sorted by increasing depth
-    pub fn files(&self, root: Directory) -> Result<Vec<(File, &FileInfo)>, TreeError> {
+    pub fn files(&self, root: Directory) -> Result<Vec<(File, &Info<FileInfo>)>, TreeError> {
         let mut res = Vec::new();
         let mut frontier = VecDeque::new();
         frontier.push_back(root.id);
@@ -167,7 +172,15 @@ impl Tree {
             .collect())
     }
 
-    pub fn get(&self, file: &File) -> Result<&FileInfo, TreeError> {
+    /// All entities ever put to the tree
+    pub fn iter_all<'a>(&'a self) -> impl Iterator<Item=Info> + 'a {
+        std::iter::empty()
+            .chain(self.directories.iter().map(|x| x.1.info.info.clone().into()))
+            .chain(self.files.iter().map(|x| x.1.info.clone().into()))
+            .chain(self.others.iter().map(|x| x.clone().into()))
+    }
+
+    pub fn get(&self, file: &File) -> Result<&Info<FileInfo>, TreeError> {
         self.files
             .get(file.id)
             .map(|x| &x.info)
@@ -202,18 +215,20 @@ impl Tree {
             dirs: vec![],
             files: vec![],
             info: DirectoryInfo {
-                name: root,
+                name: root.to_vec(),
                 size: 0,
+                info: Info::fake(root),
             },
         });
         Tree {
             directories: dirs,
             files: Arena::new(),
+            others: Vec::new(),
             root,
         }
     }
 
-    fn get_directory_or_create<P: AsRef<Path>>(&mut self, path: P) -> Result<Id<DirWrap>, TreeError> {
+    fn get_directory<P: AsRef<Path>>(&mut self, path: P) -> Result<Id<DirWrap>, TreeError> {
         let path = path.as_ref();
 
         let root = self.directories.get(self.root).ok_or(TreeError::Corrupt)?;
@@ -227,9 +242,9 @@ impl Tree {
                 let filename = path.file_name().ok_or(TreeError::InvalidPath)?;
                 let filename = osstr_to_bytes(filename);
 
-                let parent_id = self.get_directory_or_create(parent)?;
+                let parent_id = self.get_directory(parent)?;
 
-                // Borrow parent immutable
+                // Trying to find a dir.
                 let parent = self.directories.get(parent_id).ok_or(TreeError::Corrupt)?;
                 for &i in &parent.dirs {
                     let d = self.directories.get(i).ok_or(TreeError::Corrupt)?;
@@ -238,30 +253,20 @@ impl Tree {
                     }
                 }
 
-                let id = self.directories.alloc(DirWrap {
-                    parent: Some(parent_id),
-                    dirs: vec![],
-                    files: vec![],
-                    info: DirectoryInfo {
-                        name: filename.into_owned(),
-                        size: u64::MAX,
-                    },
-                });
-
-                // Now borrow mutable
-                let parent = self.directories.get_mut(parent_id).ok_or(TreeError::Corrupt)?;
-                parent.dirs.push(id);
-
-                Ok(id)
+                // Can't find such dir.
+                Err(TreeError::NoDirectoryExists)
             }
         }
     }
 
-    fn put_file(&mut self, info: FileInfo) -> Result<Id<FileWrap>, TreeError> {
-        let path = bytes_to_osstr(&info.path).map_err(|_| TreeError::InvalidPath)?;
-        let path = Path::new(&path);
+    fn prepare_place<'a, 'b, Kind>(&'a mut self, info: &'b Info<Kind>) -> Result<(
+        Cow<'b, OsStr>,
+        Id<DirWrap>
+    ), TreeError> {
+        let path_cow = bytes_to_osstr(&info.path).map_err(|_| TreeError::InvalidPath)?;
+        let path = Path::new(&path_cow);
         let parent = path.parent().ok_or(TreeError::InvalidPath)?;
-        let parent = self.get_directory_or_create(parent)?;
+        let parent = self.get_directory(parent)?;
         let directory = self.directories.get_mut(parent).ok_or(TreeError::Corrupt)?;
 
         for &i in &directory.files {
@@ -271,12 +276,40 @@ impl Tree {
             }
         }
 
+        Ok((path_cow, parent))
+    }
+
+    fn put_file(&mut self, info: Info<FileInfo>) -> Result<Id<FileWrap>, TreeError> {
+        let (_, parent) = self.prepare_place(&info)?;
         let res = self.files.alloc(FileWrap {
             parent,
             info,
         });
+        let directory = self.directories.get_mut(parent).ok_or(TreeError::Corrupt)?;
         directory.files.push(res);
         Ok(res)
+    }
+
+    fn put_dir(&mut self, info: Info<DirInfo>) -> Result<Id<DirWrap>, TreeError> {
+        let (path, parent) = self.prepare_place(&info)?;
+        let name = Path::new(&path).file_name().ok_or(TreeError::InvalidPath)?;
+        let res = self.directories.alloc(DirWrap {
+            parent: Some(parent),
+            dirs: Vec::new(),
+            files: Vec::new(),
+            info: DirectoryInfo {
+                name: osstr_to_bytes(name).into_owned(),
+                size: 0,
+                info,
+            },
+        });
+        let directory = self.directories.get_mut(parent).ok_or(TreeError::Corrupt)?;
+        directory.dirs.push(res);
+        Ok(res)
+    }
+
+    fn put_other(&mut self, info: Info<UnknownInfo>) {
+        self.others.push(info);
     }
 
     fn fill_sizes(&mut self, root_id: Id<DirWrap>) -> Result<u64, TreeError> {
@@ -284,7 +317,7 @@ impl Tree {
         let mut size = 0;
         for &i in &root.files {
             let f = self.files.get(i).ok_or(TreeError::Corrupt)?;
-            size += f.info.size().unwrap_or_default();
+            size += f.info.data.size;
         }
         let dirs = root.dirs.to_vec();
         for i in dirs {
@@ -307,27 +340,20 @@ pub enum CollectionError {
     Io(#[from] std::io::Error),
 }
 
-pub fn collect<P: AsRef<Path>>(root: P) -> Result<Tree, CollectionError> {
+pub fn collect<P: AsRef<Path>>(root: P, alias: Vec<u8>) -> Result<Tree, CollectionError> {
     let root = root.as_ref();
     let walk = walkdir::WalkDir::new(root).into_iter();
-    let root = osstr_to_bytes(root.as_os_str());
-    let mut tree = Tree::new(root.to_vec());
+    let mut tree = Tree::new(alias);
 
     for i in walk {
         let i = i?;
-        if i.file_type().is_file() {
-            let meta = i.metadata()?;
-            tree.put_file(FileInfo {
-                path: osstr_to_bytes(i.path().as_os_str()).into_owned(),
-                inode: meta.inode(),
-                mode: meta.mode(),
-                ctime: meta.created()?.into(),
-                mtime: meta.modified()?.into(),
-                kind: FileKind::File {
-                    size: meta.len(),
-                },
-                hash: None,
-            })?;
+        let meta = i.metadata()?;
+        let path = osstr_to_bytes(i.path().as_os_str()).into_owned();
+        let info = Info::with_metadata(path, meta).turn();
+        match info {
+            InfoKind::File(file) => { tree.put_file(file)?; }
+            InfoKind::Dir(dir) => { tree.put_dir(dir)?; }
+            InfoKind::Unknown(other) => tree.put_other(other),
         }
     }
     tree.fill_sizes(tree.root)?;

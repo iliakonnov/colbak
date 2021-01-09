@@ -5,15 +5,16 @@ use std::path::PathBuf;
 use time::OffsetDateTime as DateTime;
 use async_trait::async_trait;
 use rusoto_core::credential::{AwsCredentials, ProvideAwsCredentials, CredentialsError};
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 mod fileinfo;
-use fileinfo::FileInfo;
+use fileinfo::Info;
 
 mod strings;
 mod cpio;
 mod collector;
 mod fileext;
+mod database;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -47,16 +48,7 @@ impl ProvideAwsCredentials for AwsAuth {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum FileKind {
-    File {
-        size: u64
-    },
-    Directory,
-    Unknown
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Checksum(u128);
 
@@ -72,21 +64,9 @@ impl std::fmt::Display for Checksum {
     }
 }
 
-struct Stored<T> {
-    stored_at: DateTime,
-    etag: String,
-    key: String,
-    data: T,
-}
-
-enum Pack {
-    Single(FileInfo),
-    Many(Vec<FileInfo>)
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let res = collector::collect("./test")?;
+    let res = collector::collect("./test", b"./test".to_vec())?;
     println!("{}", res);
     Ok(())
 }
