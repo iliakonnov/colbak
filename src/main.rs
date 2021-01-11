@@ -1,5 +1,6 @@
-#![feature(type_alias_impl_trait)]
+#![feature(type_alias_impl_trait, backtrace)]
 #![cfg_attr(windows, feature(windows_by_handle))]
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use time::OffsetDateTime as DateTime;
@@ -9,12 +10,13 @@ use serde::{Serialize, Deserialize};
 
 mod fileinfo;
 use fileinfo::Info;
+use sha2::Digest;
 
+mod serialization;
 mod strings;
 mod cpio;
 mod collector;
 mod fileext;
-mod database;
 
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
@@ -48,25 +50,50 @@ impl ProvideAwsCredentials for AwsAuth {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// 256-bit hash
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Checksum(u128);
+pub struct Checksum([u8; 32]);
 
-impl From<xxhrs::XXH3_128<'_>> for Checksum {
-    fn from(x: xxhrs::XXH3_128) -> Checksum {
-        Checksum(x.finish())
+impl<D: Digest> From<D> for Checksum {
+    fn from(x: D) -> Checksum {
+        let fin = x.finalize();
+        let mut arr = [0; 32];
+        arr.copy_from_slice(&fin[0..32]);
+        Checksum(arr)
     }
 }
 
 impl std::fmt::Display for Checksum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-         f.write_fmt(format_args!("{{{:x}}}", self.0))
+        f.write_str("{")?;
+        for i in &self.0 {
+            f.write_fmt(format_args!("{:x}", i))?;
+        }
+        f.write_str("}")?;
+        Ok(())
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let res = collector::collect("./test", b"./test".to_vec())?;
-    println!("{}", res);
+async fn entry_point() -> Result<(), Box<dyn std::error::Error>> {
+    let tree = collector::collect("test")?;
+    let mut writer = std::io::Cursor::new(Vec::new());
+    tree.to_json(&mut writer).await?;
+    let json = writer.into_inner();
+    let json = String::from_utf8(json)?;
+    println!("{}", json);
     Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(e) = entry_point().await {
+        eprintln!("ERROR!");
+        eprintln!("{}", e);
+
+        if let Some(trace) = e.backtrace() {
+            eprintln!("\nTRACE:");
+            eprintln!("{}", trace);
+        }
+    }
 }

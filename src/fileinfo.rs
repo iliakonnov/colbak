@@ -6,12 +6,13 @@ use tokio::fs::File;
 use serde::{Serialize, Deserialize};
 
 use crate::*;
+use crate::strings::EncodedPath;
 use crate::strings::bytes_to_osstr;
 use crate::fileext::FileExtensions;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Info<Kind=UnspecifiedInfo> {
-    pub path: Vec<u8>,
+    pub path: EncodedPath,
     pub inode: u64,
     pub mode: u32,
     pub ctime: DateTime,
@@ -21,7 +22,7 @@ pub struct Info<Kind=UnspecifiedInfo> {
 }
 
 impl<Kind> Info<Kind> where Kind: Default {
-    pub fn fake(path: Vec<u8>) -> Self {
+    pub fn fake(path: EncodedPath) -> Self {
         Self {
             path,
             inode: 0,
@@ -119,7 +120,7 @@ conversion!(using Unknown (into_unknown) from UnknownInfo);
 fn systime_to_datetime(x: Result<SystemTime, std::io::Error>) -> DateTime {
     match x {
         Ok(x) => DateTime::from(x),
-        Err(e) => DateTime::from_unix_timestamp(std::i64::MIN)
+        Err(_) => DateTime::from_unix_timestamp(std::i64::MIN)
     }
 }
 
@@ -136,8 +137,8 @@ fn extract_kind(metadata: &Metadata) -> UnspecifiedInfo {
 }
 
 impl Info {
-    pub async fn new(path: Vec<u8>) -> Result<Self, tokio::io::Error> {
-        let real_path = bytes_to_osstr(&path).unwrap();
+    pub async fn new(path: EncodedPath) -> Result<Self, tokio::io::Error> {
+        let real_path = bytes_to_osstr(&path.0).unwrap();
         let real_path = Path::new(&real_path);
         let file = File::open(real_path).await?;
         let metadata = file.metadata().await?;
@@ -145,7 +146,7 @@ impl Info {
         Ok(res)
     }
 
-    pub fn with_metadata(path: Vec<u8>, metadata: Metadata) -> Self {
+    pub fn with_metadata(path: EncodedPath, metadata: Metadata) -> Self {
         Self {
             path,
             inode: metadata.inode(),

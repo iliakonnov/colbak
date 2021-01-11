@@ -7,6 +7,7 @@ use crate::strings::*;
 use std::borrow::Cow;
 use std::path::Path;
 use crate::fileinfo::UnspecifiedInfo;
+use sha2::digest::Update;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -32,7 +33,7 @@ struct Metadata {
     inode: u64,
     ctime: i128,
     mtime: i128,
-    hash: u128,
+    hash: Checksum,
 }
 
 fn convert_u32(n: u32) -> [u16; 2] {
@@ -99,7 +100,7 @@ impl CpioHeader {
         };
         let mode = mode | (info.mode & (!0o0170000));
         let name = alias.map(str_to_bytes)
-            .unwrap_or_else(|| Cow::Borrowed(&info.path));
+            .unwrap_or_else(|| Cow::Borrowed(&info.path.0));
         let name = crop_name(name);
         let namesize = name.len() + size_of::<Metadata>();
 
@@ -122,7 +123,7 @@ impl CpioHeader {
             inode: info.inode as u64,
             ctime: info.ctime.unix_timestamp_nanos(),
             mtime: info.mtime.unix_timestamp_nanos(),
-            hash: info.hash.unwrap_or_default().0,
+            hash: info.hash.unwrap_or_default(),
         };
         let metadata: [u8; size_of::<Metadata>()] = unsafe { std::mem::transmute(metadata) };
 
@@ -173,11 +174,11 @@ impl Archive {
             let header = CpioHeader::encode(Some(alias), info);
             dst.write_all(&header).await?;
 
-            let real_path = bytes_to_osstr(&info.path)?;
+            let real_path = bytes_to_osstr(&info.path.0)?;
             let real_path = Path::new(&real_path);
             let mut file = File::open(real_path).await?;
             let mut file_length = 0;
-            let mut hash = xxhrs::XXH3_128::new();
+            let mut hash = sha2::Sha256::default();
             loop {
                 let len = file.read(&mut buf).await?;
                 if len == 0 {
@@ -185,7 +186,7 @@ impl Archive {
                 }
                 let buf = &buf[..len];
                 dst.write_all(buf).await?;
-                hash.write(buf);
+                hash.update(buf);
                 file_length += len;
             }
 

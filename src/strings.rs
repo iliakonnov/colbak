@@ -1,12 +1,15 @@
+use crate::serialization::*;
+use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ffi::OsStr;
+use std::hash::{Hash, Hasher};
 
-fn u32_to_ascii(num: u32) -> [u8; 6] {
-    // To fit into 6 bytes we need at least 41 different chars
-    // For 5 bytes we need 85, but that is too much.
+fn u64_to_ascii(num: u64) -> [u8; 12] {
+    // To fit into 12 bytes we need at least 41 different chars
+    // For 11 bytes we need 57, but that is too much.
     let digits = b'0'..b'9'; // 10
     let upper = b'A'..b'Z'; // 25
-    // 6 more chars:
+                            // 6 more chars:
     let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
 
     let alphabet = additional
@@ -17,12 +20,13 @@ fn u32_to_ascii(num: u32) -> [u8; 6] {
         .rev()
         .collect::<Vec<u8>>();
     assert!(alphabet.len() >= 41);
-    let mut result = [alphabet[0]; 6];
+    let mut result = [alphabet[0]; 12];
     let mut idx = 0;
     let mut num = num as usize;
     while num != 0 {
         let rem = num % alphabet.len();
         let div = num / alphabet.len();
+        debug_assert!(idx < 12);
         result[idx] = alphabet[rem];
         num = div;
         idx += 1;
@@ -38,8 +42,11 @@ pub fn crop_name(name: Cow<[u8]>) -> Cow<[u8]> {
         return name;
     }
 
-    let hash = xxhrs::XXH32::hash(&name);
-    let hash = u32_to_ascii(hash);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    let hash = u64_to_ascii(hash);
     let ext_start = name.len() - 10;
     let dot = (&name[ext_start..])
         .iter()
@@ -55,6 +62,32 @@ pub fn crop_name(name: Cow<[u8]>) -> Cow<[u8]> {
         .copied()
         .collect::<Vec<u8>>();
     Cow::Owned(res)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EncodedPath(
+    #[serde(serialize_with = "as_base64", deserialize_with = "from_base64")] pub Vec<u8>,
+);
+
+impl From<Vec<u8>> for EncodedPath {
+    fn from(x: Vec<u8>) -> Self {
+        EncodedPath(x)
+    }
+}
+
+impl From<EncodedPath> for Vec<u8> {
+    fn from(x: EncodedPath) -> Vec<u8> {
+        x.0
+    }
+}
+
+impl<T> AsRef<T> for EncodedPath
+where
+    Vec<u8>: AsRef<T>,
+{
+    fn as_ref(&self) -> &T {
+        self.0.as_ref()
+    }
 }
 
 pub fn osstr_to_bytes(s: &OsStr) -> Cow<[u8]> {
