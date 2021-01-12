@@ -1,4 +1,4 @@
-use thiserror::*;
+use snafu::{Snafu, ResultExt};
 use std::mem::size_of;
 use tokio::io::AsyncWrite;
 
@@ -142,17 +142,21 @@ pub struct Archive {
     files: Vec<(String, Info)>,
 }
 
-#[derive(Error, Debug)]
+#[derive(Snafu, Debug)]
 pub enum ArchivingError {
-    #[error("something went wrong when performing IO: {0}")]
-    Io(#[from] tokio::io::Error),
-    #[error("real hash differs from specified (expected {expected}, found {found})")]
+    #[snafu(display("something went wrong when performing IO: {}", source))]
+    IoFailed {
+        source: tokio::io::Error
+    },
+    #[snafu(display("real hash differs from specified (expected {}, found {})", expected, found))]
     HashMismatch {
         expected: Checksum,
         found: Checksum,
     },
-    #[error("unable to encode filename: {0}")]
-    InvalidFilename(#[from] os_str_bytes::EncodingError),
+    #[snafu(display("unable to encode filename: {}", source))]
+    InvalidFilename {
+        source: os_str_bytes::EncodingError
+    },
 }
 
 impl Archive {
@@ -172,20 +176,20 @@ impl Archive {
 
         for (alias, info) in &self.files {
             let header = CpioHeader::encode(Some(alias), info);
-            dst.write_all(&header).await?;
+            dst.write_all(&header).await.context(IoFailed{})?;
 
-            let real_path = bytes_to_osstr(&info.path.0)?;
+            let real_path = bytes_to_osstr(&info.path.0).context(InvalidFilename{})?;
             let real_path = Path::new(&real_path);
-            let mut file = File::open(real_path).await?;
+            let mut file = File::open(real_path).await.context(IoFailed{})?;
             let mut file_length = 0;
             let mut hash = sha2::Sha256::default();
             loop {
-                let len = file.read(&mut buf).await?;
+                let len = file.read(&mut buf).await.context(IoFailed{})?;
                 if len == 0 {
                     break;
                 }
                 let buf = &buf[..len];
-                dst.write_all(buf).await?;
+                dst.write_all(buf).await.context(IoFailed{})?;
                 hash.update(buf);
                 file_length += len;
             }
@@ -201,12 +205,12 @@ impl Archive {
             }
 
             if file_length % 2 != 0 {
-                dst.write_all(&[0]).await?;
+                dst.write_all(&[0]).await.context(IoFailed{})?;
             }
         }
 
         let trailer = CpioHeader::trailer();
-        dst.write_all(&trailer).await?;
+        dst.write_all(&trailer).await.context(IoFailed{})?;
 
         Ok(())
     }

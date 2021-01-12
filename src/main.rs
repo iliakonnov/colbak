@@ -1,4 +1,4 @@
-#![feature(type_alias_impl_trait, backtrace)]
+#![feature(type_alias_impl_trait, backtrace, type_ascription)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
@@ -15,7 +15,7 @@ use sha2::Digest;
 mod serialization;
 mod strings;
 mod cpio;
-mod collector;
+mod tree;
 mod fileext;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -76,7 +76,7 @@ impl std::fmt::Display for Checksum {
 }
 
 async fn entry_point() -> Result<(), Box<dyn std::error::Error>> {
-    let tree = collector::collect("test")?;
+    let tree = tree::collect("test")?;
     let mut writer = std::io::Cursor::new(Vec::new());
     tree.to_json(&mut writer).await?;
     let json = writer.into_inner();
@@ -94,6 +94,8 @@ async fn main() {
         if let Some(trace) = e.backtrace() {
             eprintln!("\nTRACE:");
             eprintln!("{}", trace);
+        } else {
+            eprintln!("\nTrace missing :(");
         }
     }
 }
