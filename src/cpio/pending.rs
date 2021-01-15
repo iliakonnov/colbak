@@ -1,20 +1,18 @@
-use std::pin::Pin;
-use std::{io, task::Poll};
-
+use super::CpioHeader;
+use crate::fileinfo::{Info, UnspecifiedInfo};
+use crate::strings::EncodedPath;
+use crate::types::Checksum;
 use fs2::FileExt;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sha2::Sha256;
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::pin::Pin;
+use std::{io, task::Poll};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
-use crate::fileinfo::{Info, UnspecifiedInfo};
-use crate::strings::EncodedPath;
-use crate::Checksum;
-
-use super::CpioHeader;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pending {
     pub info: Info,
     pub alias: EncodedPath,
@@ -28,7 +26,8 @@ pub enum CantOpen {
 }
 
 pub type PendingReader<'a> = impl AsyncRead + 'a;
-pub type OpeningReadFuture<'a> = impl std::future::Future<Output=Result<PendingReader<'a>, CantOpen>>;
+pub type OpeningReadFuture<'a> =
+    impl std::future::Future<Output = Result<PendingReader<'a>, CantOpen>>;
 
 impl Pending {
     pub fn new(info: Info, alias: EncodedPath) -> Self {

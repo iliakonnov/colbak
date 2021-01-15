@@ -36,8 +36,11 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
 
 const EXTRA_SPACE: usize = 128;
 
-pub fn crop_name(name: Cow<[u8]>) -> Cow<[u8]> {
-    let max_length = (u16::MAX as usize) - EXTRA_SPACE - 1;
+pub fn crop_name_to<L>(name: Cow<[u8]>, max_length: L) -> Cow<[u8]>
+where
+    usize: From<L>,
+{
+    let max_length = max_length.into();
     if name.len() <= max_length {
         return name;
     }

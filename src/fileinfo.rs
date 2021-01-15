@@ -1,16 +1,16 @@
-use std::fs::Metadata;
-use std::time::SystemTime;
-
-use tokio::fs::File;
-use serde::{Serialize, Deserialize};
-
-use crate::*;
-use crate::strings::EncodedPath;
 use crate::fileext::FileExtensions;
 use crate::strings::osstr_to_bytes;
+use crate::strings::EncodedPath;
+use crate::types::Checksum;
+use crate::DateTime;
+use serde::{Deserialize, Serialize};
+use std::fs::Metadata;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use tokio::fs::File;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Info<Kind=UnspecifiedInfo> {
+pub struct Info<Kind = UnspecifiedInfo> {
     pub path: EncodedPath,
     pub local_path: Option<PathBuf>,
     pub inode: u64,
@@ -21,7 +21,10 @@ pub struct Info<Kind=UnspecifiedInfo> {
     pub data: Kind,
 }
 
-impl<Kind> Info<Kind> where Kind: Default {
+impl<Kind> Info<Kind>
+where
+    Kind: Default,
+{
     pub fn fake(path: EncodedPath) -> Self {
         Self {
             path,
@@ -31,23 +34,21 @@ impl<Kind> Info<Kind> where Kind: Default {
             ctime: DateTime::from_unix_timestamp(0),
             mtime: DateTime::from_unix_timestamp(0),
             hash: None,
-            data: Kind::default()
+            data: Kind::default(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileInfo {
-    pub size: u64
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct DirInfo {
-}
+pub struct DirInfo {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct UnknownInfo {
-}
+pub struct UnknownInfo {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UnspecifiedInfo {
@@ -67,7 +68,7 @@ impl Info<UnspecifiedInfo> {
         match &self.data {
             UnspecifiedInfo::File(file) => Some(file.size),
             UnspecifiedInfo::Dir(_) => None,
-            UnspecifiedInfo::Unknown(_) => None
+            UnspecifiedInfo::Unknown(_) => None,
         }
     }
 
@@ -110,7 +111,7 @@ macro_rules! conversion {
                         mtime: self.mtime,
                         hash: self.hash,
                     }),
-                    _ => Err(self)
+                    _ => Err(self),
                 }
             }
         }
@@ -123,14 +124,14 @@ conversion!(using Unknown (into_unknown) from UnknownInfo);
 fn systime_to_datetime(x: Result<SystemTime, std::io::Error>) -> DateTime {
     match x {
         Ok(x) => DateTime::from(x),
-        Err(_) => DateTime::from_unix_timestamp(std::i64::MIN)
+        Err(_) => DateTime::from_unix_timestamp(std::i64::MIN),
     }
 }
 
 fn extract_kind(metadata: &Metadata) -> UnspecifiedInfo {
     if metadata.is_file() {
         UnspecifiedInfo::File(FileInfo {
-            size: metadata.len()
+            size: metadata.len(),
         })
     } else if metadata.is_dir() {
         UnspecifiedInfo::Dir(DirInfo {})

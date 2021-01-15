@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": ["cpio", "test.cpio", "./Cargo.lock", "./Cargo.toml"],
             "cwd": "${workspaceFolder}"
         },
         {

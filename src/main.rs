@@ -3,85 +3,58 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
-use time::OffsetDateTime as DateTime;
-use async_trait::async_trait;
-use rusoto_core::credential::{AwsCredentials, ProvideAwsCredentials, CredentialsError};
-use serde::{Serialize, Deserialize};
+
+pub use time::OffsetDateTime as DateTime;
 
 mod fileinfo;
-use fileinfo::Info;
-use sha2::Digest;
-
 mod serialization;
 mod strings;
 mod cpio;
 mod tree;
 mod fileext;
+mod types;
 
-#[derive(Debug, Deserialize, Clone)]
-struct Config {
-    host: String,
-    minimal_file_size: usize,
-    locations: Vec<Location>,
-    credentials: AwsAuth,
-}
+use structopt::StructOpt;
 
-#[derive(Debug, Deserialize, Clone)]
-struct Location {
-    from: PathBuf,
-    exclude: Vec<PathBuf>,
-    bucket: String,
-    alias: String,
-}
-
-#[derive(Deserialize, Clone)]
-struct AwsAuth(AwsCredentials);
-
-impl std::fmt::Debug for AwsAuth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("AwsAuth { ... }")
+#[derive(Debug, StructOpt)]
+#[structopt(name = "awsync")]
+enum Opt {
+    Cpio {
+        dest: PathBuf,
+        files: Vec<PathBuf>
     }
 }
 
-#[async_trait]
-impl ProvideAwsCredentials for AwsAuth {
-    async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
-        Ok(self.0.clone())
-    }
-}
 
-// 256-bit hash
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[repr(transparent)]
-pub struct Checksum([u8; 32]);
-
-impl<D: Digest> From<D> for Checksum {
-    fn from(x: D) -> Checksum {
-        let fin = x.finalize();
-        let mut arr = [0; 32];
-        arr.copy_from_slice(&fin[0..32]);
-        Checksum(arr)
-    }
-}
-
-impl std::fmt::Display for Checksum {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("{")?;
-        for i in &self.0 {
-            f.write_fmt(format_args!("{:x}", i))?;
+async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
+    match opt {
+        Opt::Cpio { dest, files } => {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut archive = cpio::Archive::new();
+            for f in files {
+                let info = fileinfo::Info::new(f).await?;
+                archive.add(info.path.clone(), info);
+            }
+            let mut src = archive.read();
+            let mut dst = tokio::fs::File::create(dest).await?;
+            let mut buf = vec![0; 1024];
+            loop {
+                let len = src.read(&mut buf).await?;
+                if len == 0 {
+                    break;
+                }
+                let slice = &buf[..len];
+                dst.write_all(slice).await?;
+            }
+            Ok(())
         }
-        f.write_str("}")?;
-        Ok(())
     }
-}
-
-async fn entry_point() -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    if let Err(e) = entry_point().await {
+    let opt = Opt::from_args();
+    if let Err(e) = entry_point(opt).await {
         eprintln!("ERROR!");
         eprintln!("{}", e);
 

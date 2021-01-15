@@ -1,13 +1,11 @@
-use pending::Pending;
-use snafu::Snafu;
-use std::mem::size_of;
-
-use crate::fileinfo::UnspecifiedInfo;
+use crate::fileinfo::{Info, UnspecifiedInfo};
 use crate::strings::*;
-use crate::{Checksum, Info};
-
+use crate::types::Checksum;
+use pending::Pending;
+use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 use std::borrow::Cow;
-
+use std::mem::size_of;
 mod engine;
 mod machine;
 mod pending;
@@ -29,18 +27,6 @@ struct CpioHeader {
     filesize: [u16; 2],
 }
 
-#[derive(Debug)]
-#[repr(C)]
-struct Metadata {
-    _zero: u8,
-    // TODO: Do we really need inode and milliseconds precision here?
-    inode: u64,
-    ctime: i128,
-    mtime: i128,
-    // TODO: Move hash to the trailer
-    hash: Checksum,
-}
-
 fn convert_u32(n: u32) -> [u16; 2] {
     let lower = n & 0x0000_FFFF;
     let higher = n >> 16;
@@ -58,7 +44,7 @@ fn convert_timestamp(x: i64) -> [u16; 2] {
 }
 
 impl CpioHeader {
-    pub fn trailer() -> Vec<u8> {
+    pub fn trailer(content: &[u8]) -> Vec<u8> {
         let name = b"TRAILER!!!\0";
         let header = CpioHeader {
             _magic: 0o070707,
@@ -77,7 +63,11 @@ impl CpioHeader {
         let mut res = Vec::with_capacity(size_of::<CpioHeader>() + name.len() + 1);
         res.extend_from_slice(&header);
         res.extend_from_slice(name);
-        res.push(0);
+        if content.is_empty() {
+            res.push(0);
+        } else {
+            res.extend_from_slice(content);
+        }
         res
     }
 
@@ -104,8 +94,9 @@ impl CpioHeader {
         };
         let mode = mode | (info.mode & (!0o0170000));
         let name = alias.map(|x| x.as_ref()).unwrap_or(&info.path.0);
-        let name = crop_name(Cow::Borrowed(name));
-        let namesize = name.len() + size_of::<Metadata>();
+        let name = crop_name_to(Cow::Borrowed(name), u16::MAX - 1);
+        let namesize = name.len() + 1;
+        debug_assert!(namesize <= u16::MAX as usize);
 
         let header = CpioHeader {
             _magic: 0o070707,
@@ -121,19 +112,10 @@ impl CpioHeader {
         };
         let header: [u8; size_of::<CpioHeader>()] = unsafe { std::mem::transmute(header) };
 
-        let metadata = Metadata {
-            _zero: 0u8,
-            inode: info.inode as u64,
-            ctime: info.ctime.unix_timestamp_nanos(),
-            mtime: info.mtime.unix_timestamp_nanos(),
-            hash: info.hash.unwrap_or_default(),
-        };
-        let metadata: [u8; size_of::<Metadata>()] = unsafe { std::mem::transmute(metadata) };
-
         let mut result = Vec::with_capacity(size_of::<CpioHeader>() + namesize + 1);
         result.extend_from_slice(&header);
         result.extend_from_slice(&name);
-        result.extend_from_slice(&metadata);
+        result.push(0);
         if namesize % 2 != 0 {
             result.push(0);
         }
@@ -141,6 +123,7 @@ impl CpioHeader {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Archive {
     files: Vec<Pending>,
 }
@@ -169,6 +152,13 @@ impl Archive {
     }
 
     pub fn trailer(&self) -> Vec<u8> {
-        CpioHeader::trailer()
+        let content = serde_json::to_vec(self).unwrap_or_default();
+        CpioHeader::trailer(&content)
+    }
+
+    pub fn read<'a>(&'a mut self) -> impl tokio::io::AsyncRead + 'a {
+        let machine = machine::Machine::new(self);
+        let engine = engine::MachineBuffer::new(machine);
+        engine
     }
 }

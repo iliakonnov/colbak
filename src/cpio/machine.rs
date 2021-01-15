@@ -16,7 +16,17 @@ pub struct Machine<'a> {
     archive: *mut Archive,
     state: State<'a>,
     position: usize,
-    waiter: Option<std::task::Waker>,
+}
+
+impl<'a> Machine<'a> {
+    pub fn new(archive: &'a mut Archive) -> Self {
+        Machine {
+            _phantom: PhantomData,
+            archive: archive as *mut _,
+            state: State::None,
+            position: 0,
+        }
+    }
 }
 
 // None -> Header -> OpeningFile -> File -> None again
@@ -32,6 +42,7 @@ enum State<'a> {
     },
     File {
         reader: Pin<Box<PendingReader<'a>>>,
+        length: usize,
     },
     Trailer,
     Eof,
@@ -50,7 +61,7 @@ impl<'a> Machine<'a> {
                 // Should not be here
                 Err(io::Error::new(
                     io::ErrorKind::Other,
-                    "Machine is in the invalid state",
+                    "Machine is in the invalid state. Prev: {}",
                 ))
             }
             State::None => {
@@ -59,8 +70,7 @@ impl<'a> Machine<'a> {
                 if self.position < archive.files.len() {
                     let file = &mut archive.files[self.position];
                     // None -> Header
-                    let new_state: State<'a> = State::Header { file };
-                    self.state = new_state;
+                    self.state = State::Header { file };
                     Ok(ReadResult::Good)
                 } else {
                     // None -> Trailer
@@ -81,33 +91,53 @@ impl<'a> Machine<'a> {
             }
             State::OpeningFile { mut future } => {
                 match future.as_mut().poll(cx) {
-                    Poll::Pending => Ok(ReadResult::Pending),
-                    Poll::Ready(Err(err)) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                    Poll::Pending => {
+                        self.state = State::OpeningFile { future };
+                        Ok(ReadResult::Pending)
+                    }
+                    Poll::Ready(Err(err)) => {
+                        self.state = State::OpeningFile { future };
+                        Err(io::Error::new(io::ErrorKind::Other, err))
+                    }
                     Poll::Ready(Ok(reader)) => {
                         // OpeningFile -> File
                         self.state = State::File {
                             reader: Box::pin(reader),
+                            length: 0,
                         };
                         Ok(ReadResult::Good)
                     }
                 }
             }
-            State::File { mut reader } => {
+            State::File { mut reader, length } => {
                 let slice = buf.remaining();
                 let is_empty = slice.is_empty();
                 match reader.as_mut().poll_read(cx, slice) {
-                    Poll::Pending => Ok(ReadResult::Pending),
-                    Poll::Ready(Err(e)) => Err(e),
+                    Poll::Pending => {
+                        self.state = State::File { reader, length };
+                        Ok(ReadResult::Pending)
+                    }
+                    Poll::Ready(Err(e)) => {
+                        self.state = State::File { reader, length };
+                        Err(e)
+                    }
                     Poll::Ready(Ok(0)) if !is_empty => {
                         self.position += 1;
+                        if length % 2 != 0 {
+                            buf.extend_from_slice(b"0");
+                        }
                         // File -> None
                         self.state = State::None;
                         Ok(ReadResult::Good)
                     }
                     Poll::Ready(Ok(len)) => {
+                        self.state = State::File {
+                            reader,
+                            length: length + len,
+                        };
                         buf.add_used(len);
                         Ok(ReadResult::Good)
-                    },
+                    }
                 }
             }
             State::Trailer => {

@@ -61,6 +61,16 @@ pub struct MachineBuffer<'a> {
     start: usize,
 }
 
+impl<'a> MachineBuffer<'a> {
+    pub fn new(machine: Machine<'a>) -> Self {
+        Self {
+            machine,
+            buffer: Vec::new(),
+            start: 0
+        }
+    }
+}
+
 impl<'a> AsyncRead for MachineBuffer<'a> {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -69,7 +79,7 @@ impl<'a> AsyncRead for MachineBuffer<'a> {
     ) -> Poll<io::Result<usize>> {
         if !self.buffer.is_empty() {
             let buffer = &self.buffer[self.start..];
-            return if buf.len() < buffer.len() {
+            if buf.len() < buffer.len() {
                 // Can't fit everything
                 buf.copy_from_slice(&buffer[..buf.len()]);
                 self.start += buf.len();
@@ -82,7 +92,7 @@ impl<'a> AsyncRead for MachineBuffer<'a> {
                 self.buffer.clear();
                 self.start = 0;
                 Poll::Ready(Ok(len))
-            };
+            }
         } else {
             let mut this = self.project();
 
