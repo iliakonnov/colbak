@@ -1,13 +1,16 @@
-use snafu::{Snafu, ResultExt};
+use pending::Pending;
+use snafu::Snafu;
 use std::mem::size_of;
-use tokio::io::AsyncWrite;
 
-use crate::{Info, Checksum};
-use crate::strings::*;
-use std::borrow::Cow;
-use std::path::Path;
 use crate::fileinfo::UnspecifiedInfo;
-use sha2::digest::Update;
+use crate::strings::*;
+use crate::{Checksum, Info};
+
+use std::borrow::Cow;
+
+mod engine;
+mod machine;
+mod pending;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -30,9 +33,11 @@ struct CpioHeader {
 #[repr(C)]
 struct Metadata {
     _zero: u8,
+    // TODO: Do we really need inode and milliseconds precision here?
     inode: u64,
     ctime: i128,
     mtime: i128,
+    // TODO: Move hash to the trailer
     hash: Checksum,
 }
 
@@ -52,9 +57,8 @@ fn convert_timestamp(x: i64) -> [u16; 2] {
     }
 }
 
-
 impl CpioHeader {
-    fn trailer() -> Vec<u8> {
+    pub fn trailer() -> Vec<u8> {
         let name = b"TRAILER!!!\0";
         let header = CpioHeader {
             _magic: 0o070707,
@@ -77,7 +81,7 @@ impl CpioHeader {
         res
     }
 
-    fn encode(alias: Option<&str>, info: &Info) -> Vec<u8> {
+    pub fn encode(alias: Option<&EncodedPath>, info: &Info) -> Vec<u8> {
         let mode;
         let nlink;
         let filesize;
@@ -99,9 +103,8 @@ impl CpioHeader {
             }
         };
         let mode = mode | (info.mode & (!0o0170000));
-        let name = alias.map(str_to_bytes)
-            .unwrap_or_else(|| Cow::Borrowed(&info.path.0));
-        let name = crop_name(name);
+        let name = alias.map(|x| x.as_ref()).unwrap_or(&info.path.0);
+        let name = crop_name(Cow::Borrowed(name));
         let namesize = name.len() + size_of::<Metadata>();
 
         let header = CpioHeader {
@@ -139,79 +142,33 @@ impl CpioHeader {
 }
 
 pub struct Archive {
-    files: Vec<(String, Info)>,
+    files: Vec<Pending>,
 }
 
 #[derive(Snafu, Debug)]
 pub enum ArchivingError {
     #[snafu(display("something went wrong when performing IO: {}", source))]
-    IoFailed {
-        source: tokio::io::Error
-    },
-    #[snafu(display("real hash differs from specified (expected {}, found {})", expected, found))]
-    HashMismatch {
-        expected: Checksum,
-        found: Checksum,
-    },
+    IoFailed { source: tokio::io::Error },
+    #[snafu(display(
+        "real hash differs from specified (expected {}, found {})",
+        expected,
+        found
+    ))]
+    HashMismatch { expected: Checksum, found: Checksum },
     #[snafu(display("unable to encode filename: {}", source))]
-    InvalidFilename {
-        source: os_str_bytes::EncodingError
-    },
+    InvalidFilename { source: os_str_bytes::EncodingError },
 }
 
 impl Archive {
     pub fn new() -> Self {
-        Archive {
-            files: Vec::new()
-        }
-    }
-    pub fn add(&mut self, alias: String, file: Info) {
-        self.files.push((alias, file));
+        Archive { files: Vec::new() }
     }
 
-    pub async fn write<W: AsyncWrite + Unpin>(&self, mut dst: W) -> Result<(), ArchivingError> {
-        use tokio::io::{AsyncWriteExt, AsyncReadExt};
-        use tokio::fs::File;
-        let mut buf = [0; 65536];
+    pub fn add(&mut self, alias: EncodedPath, file: Info) {
+        self.files.push(Pending::new(file, alias));
+    }
 
-        for (alias, info) in &self.files {
-            let header = CpioHeader::encode(Some(alias), info);
-            dst.write_all(&header).await.context(IoFailed{})?;
-
-            let real_path = bytes_to_osstr(&info.path.0).context(InvalidFilename{})?;
-            let real_path = Path::new(&real_path);
-            let mut file = File::open(real_path).await.context(IoFailed{})?;
-            let mut file_length = 0;
-            let mut hash = sha2::Sha256::default();
-            loop {
-                let len = file.read(&mut buf).await.context(IoFailed{})?;
-                if len == 0 {
-                    break;
-                }
-                let buf = &buf[..len];
-                dst.write_all(buf).await.context(IoFailed{})?;
-                hash.update(buf);
-                file_length += len;
-            }
-
-            let checksum = Checksum::from(hash);
-            if let Some(expected) = info.hash {
-                if expected != checksum {
-                    return Err(ArchivingError::HashMismatch {
-                        expected,
-                        found: checksum,
-                    });
-                }
-            }
-
-            if file_length % 2 != 0 {
-                dst.write_all(&[0]).await.context(IoFailed{})?;
-            }
-        }
-
-        let trailer = CpioHeader::trailer();
-        dst.write_all(&trailer).await.context(IoFailed{})?;
-
-        Ok(())
+    pub fn trailer(&self) -> Vec<u8> {
+        CpioHeader::trailer()
     }
 }

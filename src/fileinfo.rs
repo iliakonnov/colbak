@@ -1,5 +1,4 @@
 use std::fs::Metadata;
-use std::path::Path;
 use std::time::SystemTime;
 
 use tokio::fs::File;
@@ -7,12 +6,13 @@ use serde::{Serialize, Deserialize};
 
 use crate::*;
 use crate::strings::EncodedPath;
-use crate::strings::bytes_to_osstr;
 use crate::fileext::FileExtensions;
+use crate::strings::osstr_to_bytes;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Info<Kind=UnspecifiedInfo> {
     pub path: EncodedPath,
+    pub local_path: Option<PathBuf>,
     pub inode: u64,
     pub mode: u32,
     pub ctime: DateTime,
@@ -25,6 +25,7 @@ impl<Kind> Info<Kind> where Kind: Default {
     pub fn fake(path: EncodedPath) -> Self {
         Self {
             path,
+            local_path: None,
             inode: 0,
             mode: 0,
             ctime: DateTime::from_unix_timestamp(0),
@@ -35,16 +36,16 @@ impl<Kind> Info<Kind> where Kind: Default {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileInfo {
     pub size: u64
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct DirInfo {
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct UnknownInfo {
 }
 
@@ -85,6 +86,7 @@ macro_rules! conversion {
             fn from(x: Info<$t>) -> Self {
                 Self {
                     path: x.path,
+                    local_path: x.local_path,
                     inode: x.inode,
                     mode: x.mode,
                     ctime: x.ctime,
@@ -101,6 +103,7 @@ macro_rules! conversion {
                     UnspecifiedInfo::$i(data) => Ok(Info {
                         data,
                         path: self.path,
+                        local_path: self.local_path,
                         inode: self.inode,
                         mode: self.mode,
                         ctime: self.ctime,
@@ -137,18 +140,20 @@ fn extract_kind(metadata: &Metadata) -> UnspecifiedInfo {
 }
 
 impl Info {
-    pub async fn new(path: EncodedPath) -> Result<Self, tokio::io::Error> {
-        let real_path = bytes_to_osstr(&path.0).unwrap();
-        let real_path = Path::new(&real_path);
-        let file = File::open(real_path).await?;
+    pub async fn new(local_path: PathBuf) -> Result<Self, tokio::io::Error> {
+        let file = File::open(&local_path).await?;
         let metadata = file.metadata().await?;
-        let res = Info::with_metadata(path, metadata);
+
+        let path = osstr_to_bytes(local_path.as_os_str()).to_vec();
+        let mut res = Info::with_metadata(path.into(), metadata);
+        res.local_path = Some(local_path);
         Ok(res)
     }
 
     pub fn with_metadata(path: EncodedPath, metadata: Metadata) -> Self {
         Self {
             path,
+            local_path: None,
             inode: metadata.inode(),
             mode: metadata.mode(),
             ctime: systime_to_datetime(metadata.created()),

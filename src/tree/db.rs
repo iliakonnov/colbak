@@ -20,16 +20,12 @@ where
     T: Serialize + for<'de> Deserialize<'de>,
 {
     fn alloc(&self, txn: &mut heed::RwTxn, val: &T) -> heed::Result<Id<T>> {
-        let idx = match self.last(txn)? {
-            Some((key, _)) => key.get() + 1,
-            None => 0,
+        let id = match self.last(txn)? {
+            Some((key, _)) => Id::next(key),
+            None => Id::first(),
         };
-        let idx = Key::new(idx);
-        self.put(txn, &idx, val)?;
-        Ok(Id {
-            idx,
-            _phantom: PhantomData::default(),
-        })
+        self.put(txn, &id.idx, val)?;
+        Ok(id)
     }
 }
 
@@ -37,6 +33,23 @@ where
 pub struct Id<T> {
     pub idx: Key,
     _phantom: PhantomData<T>,
+}
+
+impl<T> Id<T> {
+    pub(super) fn first() -> Self {
+        Id::new(0)
+    }
+
+    fn new(idx: u64) -> Self {
+        Id {
+            idx: Key::new(idx),
+            _phantom: PhantomData::default()
+        }
+    }
+
+    fn next(key: Key) -> Self {
+        Id::new(key.get() + 1)
+    }
 }
 
 impl<T> Serialize for Id<T> {

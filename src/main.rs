@@ -76,12 +76,6 @@ impl std::fmt::Display for Checksum {
 }
 
 async fn entry_point() -> Result<(), Box<dyn std::error::Error>> {
-    let tree = tree::collect("test")?;
-    let mut writer = std::io::Cursor::new(Vec::new());
-    tree.to_json(&mut writer).await?;
-    let json = writer.into_inner();
-    let json = String::from_utf8(json)?;
-    println!("{}", json);
     Ok(())
 }
 

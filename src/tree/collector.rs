@@ -3,50 +3,13 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::fileinfo::{Info, InfoKind};
-use crate::strings::{bytes_to_osstr, osstr_to_bytes, EncodedPath};
+use crate::strings::{bytes_to_osstr, osstr_to_bytes};
 
 use snafu::{Backtrace, ResultExt, Snafu};
 
 use super::*;
 
 impl Tree {
-    fn new<P: AsRef<Path>>(store: P) -> heed::Result<Self> {
-        let env = heed::EnvOpenOptions::new().max_dbs(4).open(store)?;
-
-        let directories = env.create_database(Some("dirs"))?;
-        let files = env.create_database(Some("files"))?;
-        let others = env.create_database(Some("others"))?;
-        let sizes = env.create_database(Some("by_size"))?;
-
-        let root: EncodedPath = Vec::new().into();
-        let root = DirWrap {
-            parent: None,
-            dirs: vec![],
-            files: vec![],
-            info: DirectoryInfo {
-                name: root.clone(),
-                size: 0,
-                info: Info::fake(root),
-            },
-        };
-        let mut txn = env.write_txn()?;
-        directories.clear(&mut txn)?;
-        files.clear(&mut txn)?;
-        others.clear(&mut txn)?;
-        sizes.clear(&mut txn)?;
-        let root = directories.alloc(&mut txn, &root)?;
-        txn.commit()?;
-
-        Ok(Tree {
-            env,
-            directories,
-            files,
-            others,
-            sizes,
-            root,
-        })
-    }
-
     fn get_directory<P: AsRef<Path>>(
         &self,
         txn: &heed::RoTxn,
@@ -226,20 +189,18 @@ pub enum CollectionError {
     },
 }
 
-pub fn collect<P: AsRef<Path>>(root: P) -> Result<Tree, CollectionError> {
+pub async fn collect<P: AsRef<Path>>(root: P) -> Result<Tree, CollectionError> {
     let root = root.as_ref();
     let walk = walkdir::WalkDir::new(&root).into_iter();
 
     let storage = std::env::current_dir()?.join("tree");
-    let mut tree = Tree::new(storage)?;
+    let mut tree = Tree::build(storage)?.empty()?;
 
     for i in walk {
         let i = i?;
-        let meta = i.metadata()?;
-        let path = i.path();
-        let path = osstr_to_bytes(path.as_os_str()).into_owned().into();
-        let info = Info::with_metadata(path, meta).turn();
-        match info {
+        let path = i.into_path();
+        let info = Info::new(path).await?;
+        match info.turn() {
             InfoKind::File(file) => {
                 tree.put_file(file)?;
             }

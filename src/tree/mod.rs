@@ -4,10 +4,10 @@ use heed::types::{OwnedType, SerdeBincode};
 use heed::zerocopy::{self, AsBytes, FromBytes, Unaligned};
 use heed::{Database, Env};
 use serde::{Deserialize, Serialize};
-use snafu::Backtrace;
-use snafu::{ensure, OptionExt, Snafu};
+use snafu::{ensure, Backtrace, OptionExt, Snafu};
 use std::path::PathBuf;
 
+mod builder;
 mod db;
 use db::*;
 
@@ -55,7 +55,7 @@ impl Directory {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DirWrap {
     parent: Option<Id<DirWrap>>,
     dirs: Vec<Id<DirWrap>>,
@@ -63,7 +63,7 @@ struct DirWrap {
     info: DirectoryInfo,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DirectoryInfo {
     name: EncodedPath,
     size: u64,
