@@ -19,12 +19,13 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "awsync")]
 enum Opt {
-    CpioCreate { dest: PathBuf, files: Vec<PathBuf> },
+    CpioCreate { archive: PathBuf, files: Vec<PathBuf> },
+    CpioExtract { archive: PathBuf, destination: PathBuf}
 }
 
 async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
     match opt {
-        Opt::CpioCreate { dest, files } => {
+        Opt::CpioCreate { archive: dest, files } => {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut archive = cpio::Archive::new();
             for f in files {
@@ -42,6 +43,23 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
                 let slice = &buf[..len];
                 dst.write_all(slice).await?;
             }
+            Ok(())
+        },
+        Opt::CpioExtract { archive: src, destination } => {
+            use tokio::fs::File;
+            use cpio::reader::NextItem;
+            let archive = File::open(src).await?;
+            let mut reader = cpio::Reader::new(archive);
+            let res = loop {
+                reader = match reader.advance().await? {
+                    NextItem::File(f) => {
+                        println!("{:#?}", f.info());
+                        f.skip().await?
+                    },
+                    NextItem::End(e) => break e.archive,
+                };
+            };
+            println!("{:#?}", res);
             Ok(())
         }
     }

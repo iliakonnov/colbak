@@ -1,15 +1,16 @@
 use crate::fileinfo::{Info, UnspecifiedInfo};
+use crate::DateTime;
 use crate::strings::*;
-use crate::types::Checksum;
 use pending::Pending;
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
 use std::borrow::Cow;
 use std::mem::size_of;
 mod pending;
+pub mod reader;
 mod write_proxy;
 mod writer;
 
+pub use reader::Reader;
 #[derive(Debug)]
 #[repr(C)]
 struct CpioHeader {
@@ -27,13 +28,22 @@ struct CpioHeader {
     filesize: [u16; 2],
 }
 
+const MAGIC: u16 = 0o070707;
+const TRAILER: &[u8] = b"TRAILER!!!\0";
+const TRAILER_LEN: u16 = TRAILER.len() as u16;
+
 fn convert_u32(n: u32) -> [u16; 2] {
     let lower = n & 0x0000_FFFF;
     let higher = n >> 16;
     [higher as u16, lower as u16]
 }
 
-fn convert_timestamp(x: i64) -> [u16; 2] {
+fn decode_u32(x: [u16; 2]) -> u32 {
+    let (higher, lower) = (x[0] as u32, x[1] as u32);
+    (higher << 16) | lower
+}
+
+fn encode_timestamp(x: i64) -> [u16; 2] {
     if x <= 0 {
         [0, 0]
     } else if x <= std::u32::MAX as i64 {
@@ -45,7 +55,6 @@ fn convert_timestamp(x: i64) -> [u16; 2] {
 
 impl CpioHeader {
     pub fn trailer(content: &[u8]) -> Vec<u8> {
-        let name = b"TRAILER!!!\0";
         let header = CpioHeader {
             _magic: 0o070707,
             dev_ino: [0, 0],
@@ -55,20 +64,28 @@ impl CpioHeader {
             nlink: 0,
             rdev: 0,
             mtime: [0, 0],
-            namesize: name.len() as u16,
+            namesize: TRAILER_LEN,
             filesize: [0, 0],
         };
         let header: [u8; size_of::<CpioHeader>()] = unsafe { std::mem::transmute(header) };
 
-        let mut res = Vec::with_capacity(size_of::<CpioHeader>() + name.len() + 1);
+        let mut res = Vec::with_capacity(size_of::<CpioHeader>() + TRAILER.len() + 1 + content.len());
         res.extend_from_slice(&header);
-        res.extend_from_slice(name);
-        if content.is_empty() {
+        res.extend_from_slice(TRAILER);
+        if TRAILER_LEN % 2 != 0 {
             res.push(0);
-        } else {
-            res.extend_from_slice(content);
         }
+        res.extend_from_slice(content);
         res
+    }
+
+    pub fn is_trailer(&self, name: &[u8]) -> bool {
+        matches!(self, CpioHeader {
+            mode: 0,
+            namesize: TRAILER_LEN,
+            filesize: [0, 0],
+            ..
+        }) && name == TRAILER
     }
 
     pub fn encode(alias: Option<&EncodedPath>, info: &Info) -> Vec<u8> {
@@ -98,15 +115,20 @@ impl CpioHeader {
         let namesize = name.len() + 1;
         debug_assert!(namesize <= u16::MAX as usize);
 
+        let max_normal_size = u32::MAX as u64;
+        let rdev = filesize >> 32;
+        let filesize = filesize & max_normal_size;
+        // Now maximum file size is 2^(32 + 16) = 2^48 = 256 TB
+
         let header = CpioHeader {
-            _magic: 0o070707,
+            _magic: MAGIC,
             dev_ino: convert_u32(info.inode as _),
             mode: mode as u16,
             uid: 0,
             gid: 0,
             nlink,
-            rdev: 0,
-            mtime: convert_timestamp(info.mtime.unix_timestamp()),
+            rdev: rdev as u16,
+            mtime: encode_timestamp(info.mtime.unix_timestamp()),
             namesize: namesize as u16,
             filesize: convert_u32(filesize as u32),
         };
@@ -121,25 +143,48 @@ impl CpioHeader {
         }
         result
     }
+
+    pub fn decode(data: [u8; size_of::<CpioHeader>()]) -> Option<Self> {
+        let header: CpioHeader = unsafe { std::mem::transmute(data) };
+        match header._magic {
+            MAGIC => Some(header),
+            _ => None,
+        }
+    }
+
+    pub fn size(&self) -> u64 {
+        let higher = self.rdev as u64;
+        let lower = decode_u32(self.filesize) as u64;
+        (higher << 32) | lower
+    }
+
+    pub fn info(&self, name: &[u8]) -> Info {
+        use crate::fileinfo::*;
+        let kind = self.mode & 0o0170000;
+        let mode = self.mode & 0o0000777;
+        let data = match kind {
+            0o0100000 => UnspecifiedInfo::File(FileInfo {
+                size: self.size()
+            }),
+            0o0040000 => UnspecifiedInfo::Dir(DirInfo{}),
+            _ => UnspecifiedInfo::Unknown(UnknownInfo {}),
+        };
+        Info {
+            path: name.to_vec().into(),
+            local_path: None,
+            inode: decode_u32(self.dev_ino) as _,
+            mode: mode as _,
+            ctime: DateTime::from_unix_timestamp(0),
+            mtime: DateTime::from_unix_timestamp(decode_u32(self.mtime) as _),
+            hash: None,
+            data,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Archive {
     files: Vec<Pending>,
-}
-
-#[derive(Snafu, Debug)]
-pub enum ArchivingError {
-    #[snafu(display("something went wrong when performing IO: {}", source))]
-    IoFailed { source: tokio::io::Error },
-    #[snafu(display(
-        "real hash differs from specified (expected {}, found {})",
-        expected,
-        found
-    ))]
-    HashMismatch { expected: Checksum, found: Checksum },
-    #[snafu(display("unable to encode filename: {}", source))]
-    InvalidFilename { source: os_str_bytes::EncodingError },
 }
 
 impl Archive {
