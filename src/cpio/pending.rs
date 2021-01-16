@@ -173,6 +173,7 @@ impl<'a> AsyncRead for Reading<'a> {
 
             do_check!(self.check_hash(checksum, pending));
 
+            pending.calculated = Some(checksum);
             this = Reading::SmallContinue {
                 pending,
                 data,
@@ -235,6 +236,7 @@ impl<'a> AsyncRead for Reading<'a> {
                     let checksum = hasher.into();
                     do_check!(self.check_hash(checksum, pending));
 
+                    pending.calculated = Some(checksum);
                     *self.as_mut() = Reading::Done { pending, checksum };
                     return Poll::Ready(Ok(0));
                 }

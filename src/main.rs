@@ -9,7 +9,7 @@ pub use time::OffsetDateTime as DateTime;
 mod cpio;
 mod fileext;
 mod fileinfo;
-mod serialization;
+mod serde_b64;
 mod strings;
 mod tree;
 mod types;
@@ -50,16 +50,16 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
             use cpio::reader::NextItem;
             let archive = File::open(src).await?;
             let mut reader = cpio::Reader::new(archive);
-            let res = loop {
+            let files = loop {
                 reader = match reader.advance().await? {
                     NextItem::File(f) => {
                         println!("{:#?}", f.info());
                         f.skip().await?
                     },
-                    NextItem::End(e) => break e.archive,
+                    NextItem::End(e) => break e,
                 };
             };
-            println!("{:#?}", res);
+            println!("{:#?}", files);
             Ok(())
         }
     }

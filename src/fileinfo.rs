@@ -18,6 +18,7 @@ pub struct Info<Kind = UnspecifiedInfo> {
     pub ctime: DateTime,
     pub mtime: DateTime,
     pub hash: Option<Checksum>,
+    #[serde(flatten)]
     pub data: Kind,
 }
 

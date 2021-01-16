@@ -1,4 +1,4 @@
-use crate::serialization::*;
+use crate::serde_b64;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::ffi::OsStr;
@@ -69,7 +69,7 @@ where
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EncodedPath(
-    #[serde(serialize_with = "as_base64", deserialize_with = "from_base64")] pub Vec<u8>,
+    #[serde(with = "serde_b64")] pub Vec<u8>,
 );
 
 impl From<Vec<u8>> for EncodedPath {

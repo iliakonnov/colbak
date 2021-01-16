@@ -3,6 +3,7 @@ use rusoto_core::credential::{AwsCredentials, CredentialsError, ProvideAwsCreden
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::path::PathBuf;
+use crate::serde_b64;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
@@ -39,7 +40,7 @@ impl ProvideAwsCredentials for AwsAuth {
 // 256-bit hash
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Checksum([u8; 32]);
+pub struct Checksum(#[serde(with = "serde_b64")] pub [u8; 32]);
 
 impl<D: Digest> From<D> for Checksum {
     fn from(x: D) -> Checksum {

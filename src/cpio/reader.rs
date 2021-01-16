@@ -1,7 +1,5 @@
-use crate::fileinfo::Info;
-
-use super::Archive;
 use super::CpioHeader;
+use crate::fileinfo::Info;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::mem::size_of;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -65,13 +63,14 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
     }
 }
 
-pub struct End {
-    pub archive: Option<Archive>,
+#[derive(Debug, Clone)]
+pub struct UnpackedArchive {
+    pub files: Option<Vec<Info>>,
 }
 
 pub enum NextItem<R> {
     File(ReadFile<R>),
-    End(End),
+    End(UnpackedArchive),
 }
 
 #[derive(Debug, Snafu)]
@@ -113,12 +112,12 @@ impl<R: AsyncRead + Unpin> Reader<R> {
         if header.is_trailer(&filename) {
             let mut json = Vec::new();
             self.reader.read_to_end(&mut json).await.context(IoFailed)?;
-            let archive = if json.iter().all(|x| *x == 0) {
+            let files = if json.iter().all(|x| *x == 0) {
                 None
             } else {
                 Some(serde_json::from_slice(&json).context(CantDeserializeArchive {})?)
             };
-            return Ok(NextItem::End(End { archive }));
+            return Ok(NextItem::End(UnpackedArchive { files }));
         }
 
         Ok(NextItem::File(ReadFile {

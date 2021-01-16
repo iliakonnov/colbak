@@ -197,7 +197,13 @@ impl Archive {
     }
 
     pub fn trailer(&self) -> Vec<u8> {
-        let content = serde_json::to_vec(self).unwrap_or_default();
+        let mut infos = Vec::with_capacity(self.files.len());
+        for pending in &self.files {
+            let mut info = pending.info.clone();
+            info.hash = pending.calculated.or(info.hash);
+            infos.push(info);
+        }
+        let content = serde_json::to_vec(&infos).unwrap_or_default();
         CpioHeader::trailer(&content)
     }
 
