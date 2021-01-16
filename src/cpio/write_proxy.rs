@@ -7,7 +7,7 @@ use pin_project::pin_project;
 
 use tokio::io::AsyncRead;
 
-use super::machine::Machine;
+use super::writer::Machine;
 
 pub enum ReadResult {
     Pending,
@@ -66,7 +66,7 @@ impl<'a> MachineBuffer<'a> {
         Self {
             machine,
             buffer: Vec::new(),
-            start: 0
+            start: 0,
         }
     }
 }
@@ -111,12 +111,12 @@ impl<'a> AsyncRead for MachineBuffer<'a> {
                     Ok(ReadResult::Eof) => return Poll::Ready(Ok(0)),
                     Ok(ReadResult::Good) => {
                         if buflen == 0 {
-                            return Poll::Ready(Ok(0))
+                            return Poll::Ready(Ok(0));
                         } else if cow.is_empty() {
-                            continue
+                            continue;
                         } else {
                             let len = cow.used;
-                            return Poll::Ready(Ok(len))
+                            return Poll::Ready(Ok(len));
                         }
                     }
                 };

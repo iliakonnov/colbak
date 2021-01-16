@@ -1,15 +1,14 @@
+use super::pending::PendingReader;
+use super::pending::{OpeningReadFuture, Pending};
+use super::write_proxy::CowSlice;
+use super::write_proxy::ReadResult;
+use super::Archive;
 use std::future::Future;
 use std::io;
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-
 use tokio::io::AsyncRead;
-
-use super::engine::*;
-use super::pending::PendingReader;
-use super::pending::{OpeningReadFuture, Pending};
-use super::Archive;
 
 pub struct Machine<'a> {
     _phantom: PhantomData<&'a mut Archive>,

@@ -6,8 +6,8 @@ use heed::{Database, Env};
 use crate::fileinfo::{Info, UnknownInfo};
 use crate::strings::EncodedPath;
 
-use super::{BySizeKey, DirWrap, DirectoryInfo, FileWrap, Tree, TreeError, TreeResultExt};
 use super::db::{Id, KeyedDb, KeyedDbExt};
+use super::{BySizeKey, DirWrap, DirectoryInfo, FileWrap, Tree, TreeError, TreeResultExt};
 
 pub struct TreeBuilder {
     env: Env,
@@ -56,7 +56,7 @@ impl TreeBuilder {
         let key = Id::first();
         let root: DirWrap = self.directories.get(&txn, &key.idx).or_corrupt()?;
         if simple_root() != root {
-            return super::Corrupted {}.fail()
+            return super::Corrupted {}.fail();
         }
         txn.commit()?;
         Ok(self.with_root(key))

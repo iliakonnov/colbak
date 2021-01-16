@@ -43,7 +43,7 @@ impl<T> Id<T> {
     fn new(idx: u64) -> Self {
         Id {
             idx: Key::new(idx),
-            _phantom: PhantomData::default()
+            _phantom: PhantomData::default(),
         }
     }
 

@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use std::borrow::Cow;
 use std::mem::size_of;
-mod engine;
-mod machine;
 mod pending;
+mod write_proxy;
+mod writer;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -157,8 +157,8 @@ impl Archive {
     }
 
     pub fn read<'a>(&'a mut self) -> impl tokio::io::AsyncRead + 'a {
-        let machine = machine::Machine::new(self);
-        let engine = engine::MachineBuffer::new(machine);
+        let machine = writer::Machine::new(self);
+        let engine = write_proxy::MachineBuffer::new(machine);
         engine
     }
 }

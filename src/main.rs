@@ -6,12 +6,12 @@ use std::path::PathBuf;
 
 pub use time::OffsetDateTime as DateTime;
 
+mod cpio;
+mod fileext;
 mod fileinfo;
 mod serialization;
 mod strings;
-mod cpio;
 mod tree;
-mod fileext;
 mod types;
 
 use structopt::StructOpt;
@@ -19,16 +19,12 @@ use structopt::StructOpt;
 #[derive(Debug, StructOpt)]
 #[structopt(name = "awsync")]
 enum Opt {
-    Cpio {
-        dest: PathBuf,
-        files: Vec<PathBuf>
-    }
+    CpioCreate { dest: PathBuf, files: Vec<PathBuf> },
 }
-
 
 async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
     match opt {
-        Opt::Cpio { dest, files } => {
+        Opt::CpioCreate { dest, files } => {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let mut archive = cpio::Archive::new();
             for f in files {
