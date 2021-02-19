@@ -1,6 +1,5 @@
 use crate::fileext::FileExtensions;
-use crate::strings::osstr_to_bytes;
-use crate::strings::EncodedPath;
+use crate::path::{EncodedPath, Local, PathKind};
 use crate::types::Checksum;
 use crate::DateTime;
 use serde::{Deserialize, Serialize};
@@ -10,9 +9,8 @@ use std::time::SystemTime;
 use tokio::fs::File;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Info<Kind = UnspecifiedInfo> {
-    pub path: EncodedPath,
-    pub local_path: Option<PathBuf>,
+pub struct Info<K: PathKind, Kind = UnspecifiedInfo> {
+    pub path: EncodedPath<K>,
     pub inode: u64,
     pub mode: u32,
     pub ctime: DateTime,
@@ -20,24 +18,6 @@ pub struct Info<Kind = UnspecifiedInfo> {
     pub hash: Option<Checksum>,
     #[serde(flatten)]
     pub data: Kind,
-}
-
-impl<Kind> Info<Kind>
-where
-    Kind: Default,
-{
-    pub fn fake(path: EncodedPath) -> Self {
-        Self {
-            path,
-            local_path: None,
-            inode: 0,
-            mode: 0,
-            ctime: DateTime::from_unix_timestamp(0),
-            mtime: DateTime::from_unix_timestamp(0),
-            hash: None,
-            data: Kind::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,13 +38,39 @@ pub enum UnspecifiedInfo {
     Unknown(UnknownInfo),
 }
 
-pub enum InfoKind {
-    File(Info<FileInfo>),
-    Dir(Info<DirInfo>),
-    Unknown(Info<UnknownInfo>),
+pub enum InfoKind<P: PathKind> {
+    File(Info<P, FileInfo>),
+    Dir(Info<P, DirInfo>),
+    Unknown(Info<P, UnknownInfo>),
 }
 
-impl Info<UnspecifiedInfo> {
+#[repr(C)]
+pub struct FileIdentifier {
+    inode: u64,
+    ctime: i128,
+    size: u64,
+    mtime: i128,
+}
+
+impl FileIdentifier {
+    pub fn as_bytes(&self) -> &[u8] {
+        let ptr = self as *const _ as *const _;
+        unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()) }
+    }
+}
+
+impl<K: PathKind> Info<K, FileInfo> {
+    pub fn identifier(&self) -> FileIdentifier {
+        FileIdentifier {
+            inode: self.inode,
+            ctime: self.ctime.unix_timestamp_nanos(),
+            size: self.data.size,
+            mtime: self.mtime.unix_timestamp_nanos(),
+        }
+    }
+}
+
+impl<P: PathKind> Info<P, UnspecifiedInfo> {
     pub fn size(&self) -> Option<u64> {
         match &self.data {
             UnspecifiedInfo::File(file) => Some(file.size),
@@ -73,7 +79,7 @@ impl Info<UnspecifiedInfo> {
         }
     }
 
-    pub fn turn(self) -> InfoKind {
+    pub fn turn(self) -> InfoKind<P> {
         match &self.data {
             UnspecifiedInfo::File(_) => InfoKind::File(self.into_file().unwrap()),
             UnspecifiedInfo::Dir(_) => InfoKind::Dir(self.into_dir().unwrap()),
@@ -84,11 +90,10 @@ impl Info<UnspecifiedInfo> {
 
 macro_rules! conversion {
     (using $i:ident ($f:ident) from $t:ty) => {
-        impl From<Info<$t>> for Info<UnspecifiedInfo> {
-            fn from(x: Info<$t>) -> Self {
+        impl<P: PathKind> From<Info<P, $t>> for Info<P, UnspecifiedInfo> {
+            fn from(x: Info<P, $t>) -> Self {
                 Self {
                     path: x.path,
-                    local_path: x.local_path,
                     inode: x.inode,
                     mode: x.mode,
                     ctime: x.ctime,
@@ -99,13 +104,12 @@ macro_rules! conversion {
             }
         }
 
-        impl Info<UnspecifiedInfo> {
-            pub fn $f(self) -> Result<Info<$t>, Self> {
+        impl<P: PathKind> Info<P, UnspecifiedInfo> {
+            pub fn $f(self) -> Result<Info<P, $t>, Self> {
                 match self.data {
                     UnspecifiedInfo::$i(data) => Ok(Info {
                         data,
                         path: self.path,
-                        local_path: self.local_path,
                         inode: self.inode,
                         mode: self.mode,
                         ctime: self.ctime,
@@ -141,21 +145,18 @@ fn extract_kind(metadata: &Metadata) -> UnspecifiedInfo {
     }
 }
 
-impl Info {
+impl Info<Local> {
     pub async fn new(local_path: PathBuf) -> Result<Self, tokio::io::Error> {
         let file = File::open(&local_path).await?;
         let metadata = file.metadata().await?;
 
-        let path = osstr_to_bytes(local_path.as_os_str()).to_vec();
-        let mut res = Info::with_metadata(path.into(), metadata);
-        res.local_path = Some(local_path);
-        Ok(res)
+        let path = EncodedPath::from_path(local_path);
+        Ok(Info::with_metadata(path, metadata))
     }
 
-    pub fn with_metadata(path: EncodedPath, metadata: Metadata) -> Self {
+    pub fn with_metadata(path: EncodedPath<Local>, metadata: Metadata) -> Self {
         Self {
             path,
-            local_path: None,
             inode: metadata.inode(),
             mode: metadata.mode(),
             ctime: systime_to_datetime(metadata.created()),

@@ -1,12 +1,12 @@
 use super::CpioHeader;
 use crate::fileinfo::{Info, UnspecifiedInfo};
-use crate::strings::EncodedPath;
+use crate::path::Local;
 use crate::types::Checksum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sha2::Sha256;
-use snafu::{OptionExt, ResultExt, Snafu};
+use snafu::{ResultExt, Snafu};
 use std::pin::Pin;
 use std::{io, task::Poll};
 use tokio::fs::File;
@@ -14,15 +14,14 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pending {
-    pub info: Info,
-    pub alias: EncodedPath,
+    pub info: Info<Local>,
     pub calculated: Option<Checksum>,
 }
 
 #[derive(Debug, Snafu)]
 pub enum CantOpen {
     IoFailed { source: io::Error },
-    NoLocalPath,
+    InvalidPath { source: os_str_bytes::EncodingError },
 }
 
 pub type PendingReader<'a> = impl AsyncRead + 'a;
@@ -30,16 +29,15 @@ pub type OpeningReadFuture<'a> =
     impl std::future::Future<Output = Result<PendingReader<'a>, CantOpen>>;
 
 impl Pending {
-    pub fn new(info: Info, alias: EncodedPath) -> Self {
+    pub fn new(info: Info<Local>) -> Self {
         Self {
             info,
-            alias,
             calculated: None,
         }
     }
 
-    pub async fn read<'a>(&'a mut self) -> Result<impl AsyncRead + 'a, CantOpen> {
-        let path = self.info.local_path.as_ref().context(NoLocalPath)?;
+    pub async fn read(&mut self) -> Result<impl AsyncRead + '_, CantOpen> {
+        let path = self.info.path.to_path().context(InvalidPath)?;
         let file = std::fs::File::open(path).context(IoFailed {})?;
         file.lock_exclusive().context(IoFailed {})?;
         let mut file = File::from_std(file);
@@ -63,12 +61,12 @@ impl Pending {
         Ok(reading)
     }
 
-    pub fn read_fut<'a>(&'a mut self) -> OpeningReadFuture<'a> {
+    pub fn read_fut(&mut self) -> OpeningReadFuture<'_> {
         self.read()
     }
 
     pub fn header(&self) -> Vec<u8> {
-        CpioHeader::encode(Some(&self.alias), &self.info)
+        CpioHeader::encode(&self.info)
     }
 }
 
@@ -191,7 +189,7 @@ impl<'a> AsyncRead for Reading<'a> {
         } = this
         {
             let slice = &data[start..];
-            if slice.len() == 0 {
+            if slice.is_empty() {
                 *self.as_mut() = Reading::Done { pending, checksum };
                 return Poll::Ready(Ok(0));
             }
@@ -230,7 +228,7 @@ impl<'a> AsyncRead for Reading<'a> {
                     return Poll::Ready(Err(err));
                 }
                 // EOF:
-                Poll::Ready(Ok(0)) if buf.len() != 0 => {
+                Poll::Ready(Ok(0)) if buf.is_empty() => {
                     do_check!(self.check_size(length, pending));
 
                     let checksum = hasher.into();

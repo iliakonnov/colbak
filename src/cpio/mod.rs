@@ -1,9 +1,8 @@
 use crate::fileinfo::{Info, UnspecifiedInfo};
 use crate::DateTime;
-use crate::strings::*;
+use crate::path::*;
 use pending::Pending;
 use serde::{Deserialize, Serialize};
-use std::borrow::Cow;
 use std::mem::size_of;
 mod pending;
 pub mod reader;
@@ -11,6 +10,8 @@ mod write_proxy;
 mod writer;
 
 pub use reader::Reader;
+use crate::path::EncodedPath;
+
 #[derive(Debug)]
 #[repr(C)]
 struct CpioHeader {
@@ -46,7 +47,7 @@ fn decode_u32(x: [u16; 2]) -> u32 {
 fn encode_timestamp(x: i64) -> [u16; 2] {
     if x <= 0 {
         [0, 0]
-    } else if x <= std::u32::MAX as i64 {
+    } else if x <= u32::MAX as i64 {
         convert_u32(x as u32)
     } else {
         [0xFFFF, 0xFFFF]
@@ -88,7 +89,7 @@ impl CpioHeader {
         }) && name == TRAILER
     }
 
-    pub fn encode(alias: Option<&EncodedPath>, info: &Info) -> Vec<u8> {
+    pub fn encode<K: PathKind>(info: &Info<K>) -> Vec<u8> {
         let mode;
         let nlink;
         let filesize;
@@ -110,8 +111,7 @@ impl CpioHeader {
             }
         };
         let mode = mode | (info.mode & (!0o0170000));
-        let name = alias.map(|x| x.as_ref()).unwrap_or(&info.path.0);
-        let name = crop_name_to(Cow::Borrowed(name), u16::MAX - 1);
+        let name = info.path.crop_name_to(u16::MAX - 1);
         let namesize = name.len() + 1;
         debug_assert!(namesize <= u16::MAX as usize);
 
@@ -158,7 +158,7 @@ impl CpioHeader {
         (higher << 32) | lower
     }
 
-    pub fn info(&self, name: &[u8]) -> Info {
+    pub fn info(&self, name: &[u8]) -> Info<External> {
         use crate::fileinfo::*;
         let kind = self.mode & 0o0170000;
         let mode = self.mode & 0o0000777;
@@ -170,8 +170,7 @@ impl CpioHeader {
             _ => UnspecifiedInfo::Unknown(UnknownInfo {}),
         };
         Info {
-            path: name.to_vec().into(),
-            local_path: None,
+            path: EncodedPath::from_vec(name.to_vec()),
             inode: decode_u32(self.dev_ino) as _,
             mode: mode as _,
             ctime: DateTime::from_unix_timestamp(0),
@@ -192,8 +191,8 @@ impl Archive {
         Archive { files: Vec::new() }
     }
 
-    pub fn add(&mut self, alias: EncodedPath, file: Info) {
-        self.files.push(Pending::new(file, alias));
+    pub fn add(&mut self, file: Info<Local>) {
+        self.files.push(Pending::new(file));
     }
 
     pub fn trailer(&self) -> Vec<u8> {
@@ -207,9 +206,8 @@ impl Archive {
         CpioHeader::trailer(&content)
     }
 
-    pub fn read<'a>(&'a mut self) -> impl tokio::io::AsyncRead + 'a {
+    pub fn read(&mut self) -> impl tokio::io::AsyncRead + '_ {
         let machine = writer::Machine::new(self);
-        let engine = write_proxy::MachineBuffer::new(machine);
-        engine
+        write_proxy::MachineBuffer::new(machine)
     }
 }

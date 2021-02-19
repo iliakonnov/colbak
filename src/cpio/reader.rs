@@ -3,6 +3,7 @@ use crate::fileinfo::Info;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::mem::size_of;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use crate::path::{External, Local};
 
 pub struct Reader<R> {
     reader: R,
@@ -57,7 +58,7 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
         self.drain_to(&mut sink).await
     }
 
-    pub fn info(&self) -> Info {
+    pub fn info(&self) -> Info<External> {
         let name = &self.filename[..self.filename.len() - 1];
         self.header.info(name)
     }
@@ -65,7 +66,7 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
 
 #[derive(Debug, Clone)]
 pub struct UnpackedArchive {
-    pub files: Option<Vec<Info>>,
+    pub files: Option<Vec<Info<Local>>>,
 }
 
 pub enum NextItem<R> {

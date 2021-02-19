@@ -19,26 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["cpio-extract", "real.cpio", "foobar"],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug unit tests in executable 'awsync'",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=awsync",
-                    "--package=awsync"
-                ],
-                "filter": {
-                    "name": "awsync",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
+            "args": ["tree", "test/tree", "src"],
             "cwd": "${workspaceFolder}"
         }
     ]

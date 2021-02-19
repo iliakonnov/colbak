@@ -1,4 +1,5 @@
 #![feature(type_alias_impl_trait, backtrace, type_ascription)]
+#![feature(macro_attributes_in_derive_output)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
@@ -10,8 +11,7 @@ mod cpio;
 mod fileext;
 mod fileinfo;
 mod serde_b64;
-mod strings;
-mod tree;
+mod path;
 mod types;
 
 use structopt::StructOpt;
@@ -20,7 +20,8 @@ use structopt::StructOpt;
 #[structopt(name = "awsync")]
 enum Opt {
     CpioCreate { archive: PathBuf, files: Vec<PathBuf> },
-    CpioExtract { archive: PathBuf, destination: PathBuf}
+    CpioExtract { archive: PathBuf, destination: PathBuf},
+    Tree { target: PathBuf, root: PathBuf },
 }
 
 async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
@@ -30,7 +31,7 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
             let mut archive = cpio::Archive::new();
             for f in files {
                 let info = fileinfo::Info::new(f).await?;
-                archive.add(info.path.clone(), info);
+                archive.add(info);
             }
             let mut src = archive.read();
             let mut dst = tokio::fs::File::create(dest).await?;
@@ -60,6 +61,10 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
                 };
             };
             println!("{:#?}", files);
+            Ok(())
+        },
+        Opt::Tree { target, root } => {
+            //let _tree = tree::collect(root, target).await?;
             Ok(())
         }
     }
