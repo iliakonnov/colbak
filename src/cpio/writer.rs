@@ -1,154 +1,242 @@
-use super::pending::PendingReader;
-use super::pending::{OpeningReadFuture, Pending};
-use super::write_proxy::CowSlice;
-use super::write_proxy::ReadResult;
-use super::Archive;
+use super::pending::{OpeningReadFuture, Pending, PendingReader};
+use super::state_machine::*;
+use crate::cpio::smart_read::{SmartBuf, SmartRead, SmartReader};
+use crate::cpio::Archive;
+use either::Either;
+use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::AsyncRead;
+use tokio::io::{AsyncRead, ReadBuf};
 
-pub struct Machine<'a> {
-    _phantom: PhantomData<&'a mut Archive>,
-    archive: *mut Archive,
-    state: State<'a>,
-    position: usize,
+pin_project! {
+    pub struct Reader<'a> {
+        #[pin]
+        inner: SmartReader<State<'a>>
+    }
 }
 
-impl<'a> Machine<'a> {
-    pub fn new(archive: &'a mut Archive) -> Self {
-        Machine {
-            _phantom: PhantomData,
-            archive: archive as *mut _,
-            state: State::None,
-            position: 0,
+impl<'a> AsyncRead for Reader<'a> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.project().inner.poll_read(cx, buf)
+    }
+}
+
+impl Reader<'_> {
+    pub fn new(archive: &mut Archive) -> Reader {
+        Reader {
+            inner: SmartReader::new(State::None(states::None {
+                archive: archive as *mut _,
+                phantom: Default::default(),
+                position: 0,
+            })),
         }
     }
 }
 
+//                                  ↙--↖
 // None -> Header -> OpeningFile -> File -> None again
-//     \-> Trailer -> EOF
+//     \-> Trailer -> EOF /
+//                     ↖-/
 
 enum State<'a> {
-    None,
-    Header {
-        file: &'a mut Pending,
-    },
-    OpeningFile {
-        future: Pin<Box<OpeningReadFuture<'a>>>,
-    },
-    File {
-        reader: Pin<Box<PendingReader<'a>>>,
-        length: usize,
-    },
-    Trailer,
-    Eof,
-    Invalid,
+    None(states::None<'a>),
+    Header(states::Header<'a>),
+    OpeningFile(states::OpeningFile<'a>),
+    File(states::File<'a>),
+    Trailer(states::Trailer<'a>),
+    Eof(states::Eof),
+    Poisoned,
 }
 
-impl<'a> Machine<'a> {
-    pub fn read(
-        mut self: Pin<&mut Self>,
+impl SmartRead for State<'_> {
+    fn amortized_read(
+        self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut CowSlice<'_, '_>,
-    ) -> io::Result<ReadResult> {
-        let state = std::mem::replace(&mut self.state, State::Invalid);
-        match state {
-            State::Invalid => {
-                // Should not be here
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Machine is in the invalid state. Prev: {}",
-                ))
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let state = std::mem::replace(this, State::Poisoned);
+        let (new_state, result) = match_advance! {
+            match state.advance(cx, buf) {
+                State::Poisoned => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "State is poisoned"))),
+                State::None => |x| match x {
+                    Either::Left(header) => State::Header(header),
+                    Either::Right(trailer) => State::Trailer(trailer),
+                },
+                State::Header => State::OpeningFile,
+                State::OpeningFile => State::File,
+                State::File => |x| match x {
+                    Either::Left(file) => State::File(file),
+                    Either::Right(none) => State::None(none)
+                },
+                State::Trailer => State::Eof,
+                State::Eof => State::Eof,
             }
-            State::None => {
-                // Switch to the next file
-                let archive = unsafe { self.archive.as_mut::<'a>() }.unwrap();
-                if self.position < archive.files.len() {
-                    let file = &mut archive.files[self.position];
-                    // None -> Header
-                    self.state = State::Header { file };
-                    Ok(ReadResult::Good)
-                } else {
-                    // None -> Trailer
-                    self.state = State::Trailer;
-                    Ok(ReadResult::Good)
-                }
-            }
-            State::Header { file } => {
-                let header = file.header();
-                buf.extend_from_slice(&header);
+        };
+        *this = new_state;
+        result
+    }
+}
 
-                // Header -> OpeningFile
-                let future = file.read_fut();
-                self.state = State::OpeningFile {
-                    future: Box::pin(future),
-                };
-                Ok(ReadResult::Good)
-            }
-            State::OpeningFile { mut future } => {
-                match future.as_mut().poll(cx) {
-                    Poll::Pending => {
-                        self.state = State::OpeningFile { future };
-                        Ok(ReadResult::Pending)
-                    }
-                    Poll::Ready(Err(err)) => {
-                        self.state = State::OpeningFile { future };
-                        Err(io::Error::new(io::ErrorKind::Other, err))
-                    }
-                    Poll::Ready(Ok(reader)) => {
-                        // OpeningFile -> File
-                        self.state = State::File {
-                            reader: Box::pin(reader),
-                            length: 0,
-                        };
-                        Ok(ReadResult::Good)
-                    }
-                }
-            }
-            State::File { mut reader, length } => {
-                let slice = buf.remaining();
-                let is_empty = slice.is_empty();
-                match reader.as_mut().poll_read(cx, slice) {
-                    Poll::Pending => {
-                        self.state = State::File { reader, length };
-                        Ok(ReadResult::Pending)
-                    }
-                    Poll::Ready(Err(e)) => {
-                        self.state = State::File { reader, length };
-                        Err(e)
-                    }
-                    Poll::Ready(Ok(0)) if !is_empty => {
-                        self.position += 1;
-                        if length % 2 != 0 {
-                            buf.extend_from_slice(b"0");
-                        }
-                        // File -> None
-                        self.state = State::None;
-                        Ok(ReadResult::Good)
-                    }
-                    Poll::Ready(Ok(len)) => {
-                        self.state = State::File {
-                            reader,
-                            length: length + len,
-                        };
-                        buf.add_used(len);
-                        Ok(ReadResult::Good)
-                    }
-                }
-            }
-            State::Trailer => {
-                let archive = unsafe { &mut *self.archive };
-                let trailer = archive.trailer();
-                buf.extend_from_slice(&trailer);
+struct StateContainer<'a> {
+    state: State<'a>,
+}
 
-                // Trailer -> Eof
-                self.state = State::Eof;
-                Ok(ReadResult::Good)
+mod states {
+    use super::*;
+
+    pub struct None<'a> {
+        pub archive: *mut Archive,
+        pub phantom: std::marker::PhantomData<&'a mut Archive>,
+        pub position: usize,
+    }
+
+    pub struct Header<'a> {
+        pub none: None<'a>,
+        pub file: &'a mut super::Pending,
+    }
+
+    pub struct OpeningFile<'a> {
+        pub none: None<'a>,
+        pub future: Pin<Box<super::OpeningReadFuture<'a>>>,
+    }
+
+    pub struct File<'a> {
+        pub none: None<'a>,
+        pub length: u64,
+        pub reader: Pin<Box<PendingReader<'a>>>,
+    }
+
+    pub struct Trailer<'a> {
+        pub archive: &'a mut Archive,
+    }
+
+    pub struct Eof;
+}
+
+impl<'a> Advanceable for states::None<'a> {
+    type Next = Either<states::Header<'a>, states::Trailer<'a>>;
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        _buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        // Switch to the next file
+
+        let archive = unsafe {
+            // This is safe: at this state we do not have any other references to archive's content
+            &mut *self.archive
+        };
+
+        let res = if self.position < archive.files.len() {
+            let file = &mut archive.files[self.position];
+            // None -> Header
+            Either::Left(states::Header { none: self, file })
+        } else {
+            Either::Right(states::Trailer { archive })
+        };
+        AdvanceResult::Ready(res)
+    }
+}
+
+impl<'a> Advanceable for states::Header<'a> {
+    type Next = states::OpeningFile<'a>;
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        let header = self.file.header();
+        buf.put_slice(&header);
+
+        let future = self.file.read_fut();
+
+        let res = states::OpeningFile {
+            none: self.none,
+            future: Box::pin(future),
+        };
+        AdvanceResult::Ready(res)
+    }
+}
+
+impl<'a> Advanceable for states::OpeningFile<'a> {
+    type Next = states::File<'a>;
+    fn advance(
+        mut self,
+        cx: &mut Context<'_>,
+        _buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        match self.future.as_mut().poll(cx) {
+            Poll::Pending => AdvanceResult::Pending(self),
+            Poll::Ready(Err(err)) => {
+                AdvanceResult::Failed(io::Error::new(io::ErrorKind::Other, err))
             }
-            State::Eof => Ok(ReadResult::Eof),
+            Poll::Ready(Ok(reader)) => {
+                // OpeningFile -> File
+                AdvanceResult::Ready(states::File {
+                    none: self.none,
+                    reader: Box::pin(reader),
+                    length: 0,
+                })
+            }
         }
+    }
+}
+
+impl<'a> Advanceable for states::File<'a> {
+    type Next = Either<Self, states::None<'a>>;
+    fn advance(
+        mut self,
+        cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        match buf.fill_using(self.reader.as_mut(), cx) {
+            Poll::Pending => AdvanceResult::Pending(self),
+            Poll::Ready(Err(e)) => AdvanceResult::Failed(e),
+            Poll::Ready(Ok(None)) => {
+                // EOF
+                if self.length % 2 != 0 {
+                    buf.put_slice(&[0]);
+                }
+                // Switch to next file
+                self.none.position += 1;
+                AdvanceResult::Ready(Either::Right(self.none))
+            }
+            Poll::Ready(Ok(Some(written))) => {
+                self.length += written.len() as u64;
+                AdvanceResult::Ready(Either::Left(self))
+            }
+        }
+    }
+}
+
+impl<'a> Advanceable for states::Trailer<'a> {
+    type Next = states::Eof;
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        let trailer = self.archive.trailer();
+        buf.put_slice(&trailer);
+        AdvanceResult::Ready(states::Eof)
+    }
+}
+
+impl Advanceable for states::Eof {
+    type Next = states::Eof;
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        buf.eof();
+        AdvanceResult::Ready(states::Eof)
     }
 }

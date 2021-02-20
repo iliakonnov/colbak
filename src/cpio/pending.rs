@@ -1,16 +1,20 @@
-use super::CpioHeader;
+use crate::cpio::smart_read::{SmartBuf, SmartRead, SmartReader};
+use crate::cpio::state_machine::{AdvanceResult, Advanceable};
+use crate::cpio::CpioHeader;
 use crate::fileinfo::{Info, UnspecifiedInfo};
 use crate::path::Local;
 use crate::types::Checksum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use snafu::{ResultExt, Snafu};
+use std::io;
 use std::pin::Pin;
-use std::{io, task::Poll};
+use std::task::{Context, Poll};
 use tokio::fs::File;
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead};
+
+enum State {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pending {
@@ -40,25 +44,15 @@ impl Pending {
         let path = self.info.path.to_path().context(InvalidPath)?;
         let file = std::fs::File::open(path).context(IoFailed {})?;
         file.lock_exclusive().context(IoFailed {})?;
-        let mut file = File::from_std(file);
-        let size = file.metadata().await.context(IoFailed {})?.len();
+        let file = File::from_std(file);
 
-        let reading = if size < 10 * 1024 * 1024 {
-            let mut data = Vec::new();
-            file.read_to_end(&mut data).await.context(IoFailed {})?;
-            Reading::SmallBegin {
-                pending: self,
-                data,
-            }
-        } else {
-            Reading::Large {
-                pending: self,
-                opened: Box::pin(file),
-                hasher: Sha256::default(),
-                length: 0,
-            }
-        };
-        Ok(reading)
+        let reading = Reading::File(states::File {
+            pending: self,
+            opened: Box::pin(file),
+            hasher: Sha256::default(),
+            length: 0,
+        });
+        Ok(SmartReader::new(reading))
     }
 
     pub fn read_fut(&mut self) -> OpeningReadFuture<'_> {
@@ -70,33 +64,39 @@ impl Pending {
     }
 }
 
-enum Reading<'a> {
-    SmallBegin {
-        pending: &'a mut Pending,
-        data: Vec<u8>,
-    },
-    SmallContinue {
-        pending: &'a mut Pending,
-        data: Vec<u8>,
-        start: usize,
-        checksum: Checksum,
-    },
-    Large {
-        pending: &'a mut Pending,
-        opened: Pin<Box<File>>,
-        hasher: sha2::Sha256,
-        length: u64,
-    },
-    Done {
-        pending: &'a mut Pending,
-        checksum: Checksum,
-    },
+// ↙--        ↙--↖
+// File --> Done-/
+//      \-> Mismatch -> !
+
+pub enum Reading<'a> {
+    Poisoned,
+    File(states::File<'a>),
+    Done(states::Done<'a>),
     Mismatch(Mismatch),
-    Error,
-    Invalid,
 }
 
-#[derive(Debug, Clone, Snafu)]
+impl SmartRead for Reading<'_> {
+    fn amortized_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        let state = std::mem::replace(this, Reading::Poisoned);
+        let (new_state, result) = match_advance! {
+            match state.advance(cx, buf) {
+                Reading::Poisoned => return Poll::Ready(Err(io::Error::new(io::ErrorKind::Other, "State is poisoned"))),
+                Reading::File => |x| x,
+                Reading::Done => Reading::Done,
+                Reading::Mismatch => Reading::Mismatch,
+            }
+        };
+        *this = new_state;
+        result
+    }
+}
+
+#[derive(Debug, Snafu)]
 pub enum Mismatch {
     HashMismatch {
         pending: Pending,
@@ -110,153 +110,94 @@ pub enum Mismatch {
     },
 }
 
-#[derive(Debug, Snafu)]
-struct InternalVeryBadError;
+mod states {
+    use super::*;
 
-fn check_size(found: u64, pending: &Pending) -> Result<(), Mismatch> {
-    if let UnspecifiedInfo::File(file) = &pending.info.data {
-        if file.size != found {
-            let err = Mismatch::SizeMismatch {
-                found,
-                expected: file.size,
-                pending: pending.clone(),
-            };
-            return Err(err);
+    pub struct File<'a> {
+        pub pending: &'a mut Pending,
+        pub opened: Pin<Box<tokio::fs::File>>,
+        pub hasher: Sha256,
+        pub length: u64,
+    }
+
+    pub struct Done<'a> {
+        pub pending: &'a mut Pending,
+        pub checksum: Checksum,
+    }
+}
+
+impl<'a> Advanceable for states::File<'a> {
+    type Next = Reading<'a>;
+
+    fn advance(
+        mut self,
+        cx: &mut Context<'_>,
+        buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        match buf.fill_using(self.opened.as_mut(), cx) {
+            Poll::Pending => AdvanceResult::Pending(self),
+            Poll::Ready(Err(err)) => AdvanceResult::Failed(err),
+            Poll::Ready(Ok(Some(written))) => {
+                self.length += written.len() as u64;
+                self.hasher.update(written);
+                AdvanceResult::Ready(Reading::File(self))
+            }
+            Poll::Ready(Ok(None)) => {
+                // EOF
+                buf.eof();
+
+                if let UnspecifiedInfo::File(file) = &self.pending.info.data {
+                    if file.size != self.length {
+                        return AdvanceResult::Ready(Reading::Mismatch(Mismatch::SizeMismatch {
+                            expected: file.size,
+                            found: self.length,
+                            pending: self.pending.clone(),
+                        }));
+                    }
+                }
+
+                let checksum = self.hasher.into();
+
+                if let Some(expected) = self.pending.info.hash {
+                    if checksum != expected {
+                        return AdvanceResult::Ready(Reading::Mismatch(Mismatch::HashMismatch {
+                            expected,
+                            found: checksum,
+                            pending: self.pending.clone(),
+                        }));
+                    }
+                }
+
+                self.pending.calculated = Some(checksum);
+                AdvanceResult::Ready(Reading::Done(states::Done {
+                    pending: self.pending,
+                    checksum,
+                }))
+            }
         }
     }
-    Ok(())
 }
 
-fn check_hash(found: Checksum, pending: &Pending) -> Result<(), Mismatch> {
-    if let Some(expected) = pending.info.hash {
-        if found != expected {
-            let err = Mismatch::HashMismatch {
-                expected,
-                found,
-                pending: pending.clone(),
-            };
-            return Err(err);
-        }
+impl Advanceable for Mismatch {
+    type Next = Self;
+
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        _buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        AdvanceResult::Failed(io::Error::new(io::ErrorKind::InvalidData, self))
     }
-    Ok(())
 }
 
-macro_rules! do_check {
-    ($self:ident.$check:ident($arg:expr, $pending:ident)) => {
-        if let Err(err) = $check($arg, $pending) {
-            *$self.as_mut() = Reading::Mismatch(err.clone());
-            return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, err)));
-        };
-    };
-}
+impl Advanceable for states::Done<'_> {
+    type Next = Self;
 
-impl<'a> AsyncRead for Reading<'a> {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        let mut this = std::mem::replace(&mut *self, Reading::Invalid);
-        if let Reading::Mismatch { .. } | Reading::Error = this {
-            *self.as_mut() = this;
-            return Poll::Ready(Ok(0));
-        }
-
-        if let Reading::SmallBegin { pending, data } = this {
-            do_check!(self.check_size(data.len() as u64, pending));
-
-            let mut digest = sha2::Sha256::default();
-            digest.update(&data);
-            let checksum = digest.into();
-
-            do_check!(self.check_hash(checksum, pending));
-
-            pending.calculated = Some(checksum);
-            this = Reading::SmallContinue {
-                pending,
-                data,
-                start: 0,
-                checksum,
-            }
-            // Fallthrough
-        }
-
-        if let Reading::SmallContinue {
-            pending,
-            data,
-            start,
-            checksum,
-        } = this
-        {
-            let slice = &data[start..];
-            if slice.is_empty() {
-                *self.as_mut() = Reading::Done { pending, checksum };
-                return Poll::Ready(Ok(0));
-            }
-
-            let to_read = buf.len().min(slice.len());
-            buf[..to_read].copy_from_slice(&slice[..to_read]);
-
-            *self.as_mut() = Reading::SmallContinue {
-                pending,
-                data,
-                start: start + to_read,
-                checksum,
-            };
-            return Poll::Ready(Ok(to_read));
-        }
-
-        if let Reading::Large {
-            mut opened,
-            pending,
-            mut hasher,
-            length,
-        } = this
-        {
-            match opened.as_mut().poll_read(cx, buf) {
-                Poll::Pending => {
-                    *self.as_mut() = Reading::Large {
-                        opened,
-                        pending,
-                        hasher,
-                        length,
-                    };
-                    return Poll::Pending;
-                }
-                Poll::Ready(Err(err)) => {
-                    *self.as_mut() = Reading::Error;
-                    return Poll::Ready(Err(err));
-                }
-                // EOF:
-                Poll::Ready(Ok(0)) if buf.is_empty() => {
-                    do_check!(self.check_size(length, pending));
-
-                    let checksum = hasher.into();
-                    do_check!(self.check_hash(checksum, pending));
-
-                    pending.calculated = Some(checksum);
-                    *self.as_mut() = Reading::Done { pending, checksum };
-                    return Poll::Ready(Ok(0));
-                }
-                Poll::Ready(Ok(len)) => {
-                    let slice = &buf[..len];
-                    hasher.update(slice);
-
-                    *self.as_mut() = Reading::Large {
-                        opened,
-                        pending,
-                        hasher,
-                        length: length + (len as u64),
-                    };
-                    return Poll::Ready(Ok(len));
-                }
-            }
-        }
-
-        // Either Invalid or something even worse
-        Poll::Ready(Err(io::Error::new(
-            io::ErrorKind::Other,
-            InternalVeryBadError,
-        )))
+    fn advance(
+        self,
+        _cx: &mut Context<'_>,
+        _buf: &mut SmartBuf<'_, '_, '_>,
+    ) -> AdvanceResult<Self, Self::Next> {
+        AdvanceResult::Ready(self)
     }
 }

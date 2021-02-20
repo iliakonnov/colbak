@@ -1,9 +1,9 @@
 use super::CpioHeader;
 use crate::fileinfo::Info;
+use crate::path::{External, Local};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::mem::size_of;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use crate::path::{External, Local};
 
 pub struct Reader<R> {
     reader: R,

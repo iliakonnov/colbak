@@ -1,9 +1,9 @@
+use crate::serde_b64;
 use async_trait::async_trait;
 use rusoto_core::credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::path::PathBuf;
-use crate::serde_b64;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {

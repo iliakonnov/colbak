@@ -9,7 +9,7 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
     // For 11 bytes we need 57, but that is too much.
     let digits = b'0'..b'9'; // 10
     let upper = b'A'..b'Z'; // 25
-    // 6 more chars:
+                            // 6 more chars:
     let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
 
     let alphabet = additional
@@ -98,7 +98,9 @@ impl<K: PathKind> EncodedPath<K> {
     }
 
     pub fn split_parent(&self) -> (&[u8], &[u8]) {
-        let slash = self.0.iter()
+        let slash = self
+            .0
+            .iter()
             .enumerate()
             .rev()
             .find(|(_, x)| **x == b'/')

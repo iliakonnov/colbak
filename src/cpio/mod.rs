@@ -1,16 +1,19 @@
+#[macro_use]
+mod state_machine;
+mod pending;
+pub mod reader;
+mod smart_read;
+mod writer;
+
 use crate::fileinfo::{Info, UnspecifiedInfo};
-use crate::DateTime;
 use crate::path::*;
+use crate::DateTime;
 use pending::Pending;
 use serde::{Deserialize, Serialize};
 use std::mem::size_of;
-mod pending;
-pub mod reader;
-mod write_proxy;
-mod writer;
 
-pub use reader::Reader;
 use crate::path::EncodedPath;
+pub use reader::Reader;
 
 #[derive(Debug)]
 #[repr(C)]
@@ -70,7 +73,8 @@ impl CpioHeader {
         };
         let header: [u8; size_of::<CpioHeader>()] = unsafe { std::mem::transmute(header) };
 
-        let mut res = Vec::with_capacity(size_of::<CpioHeader>() + TRAILER.len() + 1 + content.len());
+        let mut res =
+            Vec::with_capacity(size_of::<CpioHeader>() + TRAILER.len() + 1 + content.len());
         res.extend_from_slice(&header);
         res.extend_from_slice(TRAILER);
         if TRAILER_LEN % 2 != 0 {
@@ -81,12 +85,15 @@ impl CpioHeader {
     }
 
     pub fn is_trailer(&self, name: &[u8]) -> bool {
-        matches!(self, CpioHeader {
-            mode: 0,
-            namesize: TRAILER_LEN,
-            filesize: [0, 0],
-            ..
-        }) && name == TRAILER
+        matches!(
+            self,
+            CpioHeader {
+                mode: 0,
+                namesize: TRAILER_LEN,
+                filesize: [0, 0],
+                ..
+            }
+        ) && name == TRAILER
     }
 
     pub fn encode<K: PathKind>(info: &Info<K>) -> Vec<u8> {
@@ -163,10 +170,8 @@ impl CpioHeader {
         let kind = self.mode & 0o0170000;
         let mode = self.mode & 0o0000777;
         let data = match kind {
-            0o0100000 => UnspecifiedInfo::File(FileInfo {
-                size: self.size()
-            }),
-            0o0040000 => UnspecifiedInfo::Dir(DirInfo{}),
+            0o0100000 => UnspecifiedInfo::File(FileInfo { size: self.size() }),
+            0o0040000 => UnspecifiedInfo::Dir(DirInfo {}),
             _ => UnspecifiedInfo::Unknown(UnknownInfo {}),
         };
         Info {
@@ -207,7 +212,6 @@ impl Archive {
     }
 
     pub fn read(&mut self) -> impl tokio::io::AsyncRead + '_ {
-        let machine = writer::Machine::new(self);
-        write_proxy::MachineBuffer::new(machine)
+        writer::Reader::new(self)
     }
 }
