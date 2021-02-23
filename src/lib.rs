@@ -1,9 +1,13 @@
-#![feature(type_alias_impl_trait, backtrace, type_ascription)]
+#![feature(type_alias_impl_trait, backtrace, type_ascription, min_specialization)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
 use std::path::PathBuf;
 pub use time::OffsetDateTime as DateTime;
+
+
+#[macro_use]
+mod logging;
 
 pub mod cpio;
 pub mod fileext;
@@ -11,6 +15,7 @@ pub mod fileinfo;
 pub mod path;
 pub mod serde_b64;
 pub mod types;
+mod backup;
 
 type CommandResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -35,7 +40,7 @@ pub async fn create_cpio(dest: PathBuf, files: Vec<PathBuf>) -> CommandResult {
     Ok(())
 }
 
-pub async fn extract_cpio(src: PathBuf, dst: PathBuf) -> CommandResult {
+pub async fn extract_cpio(src: PathBuf, _dst: PathBuf) -> CommandResult {
     use cpio::reader::NextItem;
     use tokio::fs::File;
     let archive = File::open(src).await?;

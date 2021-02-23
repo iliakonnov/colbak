@@ -9,7 +9,7 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
     // For 11 bytes we need 57, but that is too much.
     let digits = b'0'..b'9'; // 10
     let upper = b'A'..b'Z'; // 25
-                            // 6 more chars:
+    // 6 more chars:
     let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
 
     let alphabet = additional
@@ -49,10 +49,12 @@ pub trait PathKind: std::fmt::Debug + Clone + PartialEq + Serialize + Eq + Sized
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub enum Local {}
+
 impl PathKind for Local {}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub enum External {}
+
 impl PathKind for External {}
 
 // We do not support exotic platforms.
@@ -135,6 +137,76 @@ impl<K: PathKind> EncodedPath<K> {
             .chain(extension.iter())
             .copied()
             .collect::<Vec<u8>>();
+        log!(warn: "Cropped name `{}` to `{}`", before=self.escaped(), after=res.escaped());
         Cow::Owned(res)
+    }
+}
+
+pub trait EscapedString {
+    fn escaped(&self) -> Cow<str>;
+}
+
+impl<T: PathKind> EscapedString for EncodedPath<T> {
+    fn escaped(&self) -> Cow<str> {
+        self.0.escaped()
+    }
+}
+
+impl EscapedString for [u8] {
+    fn escaped(&self) -> Cow<str> {
+        let mut remaining = self;
+        let mut result = String::new();
+        loop {
+            match std::str::from_utf8(remaining) {
+                Ok(x) => return if result.is_empty() {
+                    Cow::Borrowed(x)
+                } else {
+                    result.push_str(x);
+                    Cow::Owned(result)
+                },
+                Err(err) => {
+                    let (valid, bad) = remaining.split_at(err.valid_up_to());
+                    let (bad, rest) = bad.split_at(err.error_len().unwrap_or(0));
+                    let valid = unsafe { std::str::from_utf8_unchecked(valid) };
+                    remaining = rest;
+                    result.push_str(valid);
+                    let escaped: String = bad.iter().map(|x| format!("\\x{:02X}", x)).collect();
+                    result.push_str(&escaped);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::path::EscapedString;
+
+    #[test]
+    fn test_escape_good() {
+        let ascii = b"Hello world!";
+        let escaped = ascii.escaped();
+        assert_eq!(escaped, "Hello world!");
+    }
+
+    #[test]
+    fn test_escape_zero() {
+        let ascii = b"Hello \0 world!";
+        let escaped = ascii.escaped();
+        assert_eq!(escaped, "Hello \0 world!");
+    }
+
+    #[test]
+    fn test_escape_wrong_unicode() {
+        let ascii = b"Hello \xC3\x28 world!";
+        let escaped = ascii.escaped();
+        assert_eq!(escaped, "Hello \\xC3( world!");
+    }
+
+    #[test]
+    fn test_escape_wrong_unicode_another() {
+        let ascii = b"Hello \xF4\xBF\xBF\xBF world!";
+        let escaped = ascii.escaped();
+        assert_eq!(escaped, "Hello \\xF4\\xBF\\xBF\\xBF world!");
     }
 }

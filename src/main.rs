@@ -32,7 +32,7 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
             archive: src,
             destination,
         } => extract_cpio(src, destination).await,
-        Opt::Tree { target, root } => Ok(()),
+        Opt::Tree { target: _, root: _ } => Ok(()),
     }
 }
 

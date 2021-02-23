@@ -9,8 +9,8 @@ use std::time::SystemTime;
 use tokio::fs::File;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Info<K: PathKind, Kind = UnspecifiedInfo> {
-    pub path: EncodedPath<K>,
+pub struct Info<P: PathKind, Kind = UnspecifiedInfo> {
+    pub path: EncodedPath<P>,
     pub inode: u64,
     pub mode: u32,
     pub ctime: DateTime,
