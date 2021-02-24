@@ -1,4 +1,6 @@
 use super::pending::{OpeningReadFuture, Pending, PendingReader};
+use super::smart_read::SmartReadExt;
+use super::smart_read::SmartWrap;
 use super::state_machine::*;
 use crate::cpio::smart_read::{SmartBuf, SmartRead, SmartReader};
 use crate::cpio::Archive;
@@ -13,7 +15,7 @@ use tokio::io::{AsyncRead, ReadBuf};
 pin_project! {
     pub struct Reader<'a> {
         #[pin]
-        inner: SmartReader<State<'a>>
+        inner: SmartWrap<State<'a>>
     }
 }
 
@@ -30,11 +32,11 @@ impl<'a> AsyncRead for Reader<'a> {
 impl Reader<'_> {
     pub fn new(archive: &mut Archive) -> Reader {
         Reader {
-            inner: SmartReader::new(State::None(states::None {
+            inner: State::None(states::None {
                 archive: archive as *mut _,
                 phantom: Default::default(),
                 position: 0,
-            })),
+            }).wrap(),
         }
     }
 }

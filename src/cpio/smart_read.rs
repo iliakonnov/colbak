@@ -2,7 +2,7 @@ use pin_project_lite::pin_project;
 use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tokio::io::{AsyncRead, ReadBuf};
+use tokio::io::{AsyncRead, BufReader, ReadBuf};
 
 pin_project! {
     pub struct SmartReader<T> {
@@ -95,6 +95,16 @@ pub trait SmartRead {
     ) -> Poll<io::Result<()>>;
 }
 
+pub type SmartWrap<T> = BufReader<Energetic<SmartReader<T>>>;
+
+pub trait SmartReadExt: SmartRead + Sized {
+    fn wrap(self) -> SmartWrap<Self> {
+        BufReader::new(Energetic::new(SmartReader::new(self)))
+    }
+}
+
+impl<T: SmartRead + Sized> SmartReadExt for T {}
+
 impl<T> AsyncRead for SmartReader<T>
 where
     T: SmartRead,
@@ -157,5 +167,52 @@ where
                 }
             }
         }
+    }
+}
+
+pin_project! {
+    pub struct Energetic<T> {
+        #[pin]
+        inner: T
+    }
+}
+
+impl<T> Energetic<T> {
+    fn new(inner: T) -> Self {
+        Energetic { inner }
+    }
+}
+
+impl<T: AsyncRead> AsyncRead for Energetic<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        read_buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let mut previous = read_buf.remaining();
+        let mut is_pending = true;
+        let mut inner = self.project().inner;
+        while previous != 0 {
+            match inner.as_mut().poll_read(cx, read_buf) {
+                Poll::Pending => {
+                    if is_pending {
+                        return Poll::Pending;
+                    } else {
+                        return Poll::Ready(Ok(()));
+                    }
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                Poll::Ready(Ok(())) => {
+                    let new = read_buf.remaining();
+                    if new == previous {
+                        // EOF
+                        break;
+                    }
+                    previous = new;
+                    is_pending = false;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }

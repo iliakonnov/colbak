@@ -1,4 +1,4 @@
-#![feature(type_alias_impl_trait, backtrace, type_ascription, min_specialization)]
+#![feature(type_alias_impl_trait, backtrace, type_ascription, never_type, min_specialization)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
