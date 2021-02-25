@@ -29,7 +29,7 @@ hex = "0.4.2"
 walkdir = "2.3.1"
 fs2 = "0.4.3"
 rusoto_core = "0.46.0"
-rusoto_s3 = "0.46.0"
+rusoto_s3 = {version = "0.46.0", features=["serialize_structs"] }
 rusqlite = "0.24.2"
 either = "1.6.1"
 digest = "0.9.0"

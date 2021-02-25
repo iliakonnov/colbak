@@ -1,55 +1,80 @@
 use once_cell::sync::OnceCell;
+use serde::{Serialize, Deserialize};
+use time::OffsetDateTime;
 use std::fs::File;
-use std::io::{Stdout, Write, BufWriter};
-use std::sync::Mutex;
-use serde::Serialize;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 pub struct Logging {
-    stdout: Stdout,
     // Creating json_serde::Serializer is cheap.
     json: BufWriter<File>,
 }
 
 #[allow(non_upper_case_globals)]
 pub mod groups {
+    use super::Logging;
     use once_cell::sync::OnceCell;
     use std::sync::Mutex;
-    use super::Logging;
 
     pub static warn: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static error: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static aws: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static cli: OnceCell<Mutex<Logging>> = OnceCell::new();
 }
 
-pub fn get_log(source: &'static OnceCell<Mutex<Logging>>, name: &'static str) -> &'static Mutex<Logging> {
+pub fn get_log(
+    source: &'static OnceCell<Mutex<Logging>>,
+    name: &'static str,
+) -> &'static Mutex<Logging> {
     source.get_or_init(|| {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .append(true)
-            .open(PathBuf::from("logs/").join(name).with_extension(".json"))
+            .open(PathBuf::from("logs/").join(name).with_extension("·json"))
             .unwrap();
         Mutex::new(Logging {
-            stdout: std::io::stdout(),
             json: BufWriter::new(file),
         })
     })
 }
 
-pub fn write_log<T: Serialize>(this: &'static Mutex<Logging>, data: &T, pretty: std::fmt::Arguments<'_>) {
+pub fn write_log(
+    this: &'static Mutex<Logging>,
+    data: &[u8]
+) {
     let mut this = this.lock().unwrap();
     this.json.write_all(&[b'\n']).unwrap();
-    serde_json::to_writer(&mut this.json, data).unwrap();
+    this.json.write_all(data).unwrap();
     this.json.flush().unwrap();
-    this.stdout.write_fmt(pretty).unwrap();
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LogEntry<T> {
+    pub func: &'static str,
+    pub file: &'static str,
+    pub position: (u32, u32),
+    pub time: OffsetDateTime,
+    pub message: &'static str,
+    pub inner: T
+}
+
+#[macro_export]
 macro_rules! log {
-    ($group:ident: $fmt:literal $(, $key:ident $(=$val:expr)? )* $(; $($additional:ident $(=$add_val:expr)? )*)? ) => {
+    (@value $x:ident [$($y:tt)?]) => {log!(@value $x [$($y)?] $x)};
+    (@value $x:ident [f] $fmt:literal ) => {format!($fmt, $x)};
+    (@value $x:ident [clone] $val:expr ) => {$val.clone()};
+    (@value $x:ident [] $val:expr) => {&$val};
+    (
+        $($group:ident),*: $fmt:literal
+            $(, $(&)? $key:ident $(= $val:expr )? $(=> $suffix:tt)? )*
+            $(; $( $(&)? $additional:ident $(= $add_val:expr )? $(=> $add_suffix:tt)? ),* )?
+    ) => {{
         #[allow(non_camel_case_types)]
         {
             #[derive(::serde::Serialize)]
             struct Log<$($key,)* $($($additional,)*)?> {
-                __message: &'static str,
                 $(
                     $key: $key,
                 )*
@@ -58,21 +83,62 @@ macro_rules! log {
                 )*)?
             }
 
-            let s = Log {
-                __message: $fmt,
-                $(
-                    $key$(: $val)?,
-                )*
-                $($(
-                    $additional$(: $add_val)?,
-                )*)?
+            // Get current function name.
+            // Based on https://docs.rs/stdext/0.2.1/stdext/macro.function_name.html
+            fn f() {}
+            fn type_name_of<T>(_: T) -> &'static str {
+                std::any::type_name::<T>()
+            }
+            let name = type_name_of(f);
+            // `3` is the length of the `::f`.
+            let name = &name[..name.len() - 3];
+
+            let s = $crate::logging::LogEntry {
+                message: $fmt,
+                func: name,
+                file: file!(),
+                position: (line!(), column!()),
+                time: ::time::OffsetDateTime::now_utc(),
+                inner: Log {
+                    $(
+                        $key: log!(@value $key [$($suffix)?] $($val)? ),
+                    )*
+                    $($(
+                        $additional: log!(@value $additional [$($add_suffix)?] $($add_val)?),
+                    )*)?
+                }
             };
-            let group = crate::logging::get_log(&crate::logging::groups::$group, stringify!($group));
-            crate::logging::write_log(group, &s, format_args!(
-                concat!($fmt, '\n'), $(
-                    $key = s.$key
+
+            eprintln!(
+                concat!("[{__time} @ {__func}:{__line} => {__groups}] ", $fmt),
+                $($key = s.inner.$key, )*
+                __time=s.time, __func=s.func, __line=s.position.0, __groups=stringify!($($group),*)
+            );
+
+            let ser = ::serde_json::to_vec(&s).unwrap();
+            for group in [
+                $(
+                    $crate::logging::get_log(&crate::logging::groups::$group, stringify!($group))
                 ),*
-            ))
+            ].iter() {
+                $crate::logging::write_log(group, &ser);
+            }
         }
-    }
+    }}
+}
+
+macro_rules! catch {
+    {
+        $err:pat => log!($($args:tt)*)
+        {$($body:tt)*}
+    } => {{
+        let res = try {
+            $($body)*
+        };
+        match &res {
+            Ok(_) => (),
+            Err($err) => log!($($args)*)
+        };
+        res
+    }};
 }

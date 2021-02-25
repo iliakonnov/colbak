@@ -1,4 +1,4 @@
-#![feature(type_alias_impl_trait, backtrace, type_ascription, never_type, min_specialization)]
+#![feature(type_alias_impl_trait, backtrace, type_ascription, never_type, min_specialization, try_blocks)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
@@ -7,7 +7,7 @@ pub use time::OffsetDateTime as DateTime;
 
 
 #[macro_use]
-mod logging;
+pub mod logging;
 
 pub mod cpio;
 pub mod fileext;
@@ -15,7 +15,7 @@ pub mod fileinfo;
 pub mod path;
 pub mod serde_b64;
 pub mod types;
-mod backup;
+pub mod backup;
 
 type CommandResult = Result<(), Box<dyn std::error::Error>>;
 

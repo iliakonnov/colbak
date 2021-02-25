@@ -61,95 +61,108 @@ impl Aws {
     }
 
     async fn abort_upload(&self, upload: rusoto_s3::MultipartUpload) -> Result<(), Error> {
-        let _result = self
-            .client
-            .abort_multipart_upload(AbortMultipartUploadRequest {
-                bucket: self.bucket.to_string(),
-                key: upload.key.context(MissingRequiredFields)?,
-                upload_id: upload.upload_id.context(MissingRequiredFields)?,
-                expected_bucket_owner: upload.owner.and_then(|o| o.id),
-                request_payer: None,
-            })
-            .await
-            .context(AbortUploadFailed)?;
-        Ok(())
+        catch!(err => log!(aws,error: "Failed to abort single upload: {}", err="{:#?}"=>f; upload)
+        {
+            let _result = self
+                .client
+                .abort_multipart_upload(AbortMultipartUploadRequest {
+                    bucket: self.bucket.to_string(),
+                    key: upload.key.clone().context(MissingRequiredFields)?,
+                    upload_id: upload.upload_id.clone().context(MissingRequiredFields)?,
+                    expected_bucket_owner: upload.owner.clone().and_then(|o| o.id),
+                    request_payer: None,
+                })
+                .await
+                .context(AbortUploadFailed)?;
+        })
     }
 
     pub async fn abort_all_multiparts(&self) -> Result<(), Error> {
-        loop {
-            let response = self
-                .client
-                .list_multipart_uploads(ListMultipartUploadsRequest {
-                    bucket: self.bucket.to_string(),
-                    ..Default::default()
-                })
-                .await
-                .context(ListUploadsFailed)?;
+        catch!(err => log!(aws,error: "Failed to abort uploads: {}", err="{:#?}"=>f)
+        {
+            loop {
+                let response = self
+                    .client
+                    .list_multipart_uploads(ListMultipartUploadsRequest {
+                        bucket: self.bucket.to_string(),
+                        ..Default::default()
+                    })
+                    .await
+                    .context(ListUploadsFailed)?;
 
-            if let Some(uploads) = response.uploads {
-                let result: Vec<Result<_, _>> = self
-                    .do_many_requests(uploads.into_iter().map(|upload| self.abort_upload(upload)))
-                    .await;
-                let errors: Vec<Error> = result.into_iter().filter_map(|x| x.err()).collect();
-                if !errors.is_empty() {
-                    FailedMany { errors }.fail()?
+                if let Some(uploads) = response.uploads {
+                    let result: Vec<Result<_, _>> = self
+                        .do_many_requests(uploads.into_iter().map(|upload| self.abort_upload(upload)))
+                        .await;
+                    let errors: Vec<Error> = result.into_iter().filter_map(|x| x.err()).collect();
+                    if !errors.is_empty() {
+                        FailedMany { errors }.fail()?
+                    }
+                }
+
+                if response.is_truncated != Some(true) {
+                    break;
                 }
             }
-
-            if response.is_truncated != Some(true) {
-                break;
-            }
-        }
-        Ok(())
+        })
     }
 
     fn storage_class(&self) -> Option<String> {
         Some("DEEP_ARCHIVE".to_string())
     }
 
-    pub async fn begin_upload(&self, name: String) -> Result<MultipartUpload<'_>, Error> {
-        let upload = self
-            .client
-            .create_multipart_upload(CreateMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: name,
-                storage_class: self.storage_class(),
-                ..CreateMultipartUploadRequest::default()
-            })
-            .await
-            .context(CreateUploadFailed)?;
-        Ok(MultipartUpload {
-            root: self,
-            bucket: upload.bucket.context(MissingRequiredFields)?,
-            id: upload.upload_id.context(MissingRequiredFields)?,
-            key: upload.key.context(MissingRequiredFields)?,
-            parts: Vec::new(),
+    pub async fn begin_upload(&self, name: &str) -> Result<MultipartUpload<'_>, Error> {
+        catch!(err => log!(aws,error: "Failed to start multipart upload of {}: {}", name, err="{:#?}"=>f)
+        {
+            log!(aws: "Starting multipart upload of {:?}", name);
+            let upload = self
+                .client
+                .create_multipart_upload(CreateMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: name.to_string(),
+                    storage_class: self.storage_class(),
+                    ..CreateMultipartUploadRequest::default()
+                })
+                .await
+                .context(CreateUploadFailed)?;
+            MultipartUpload {
+                root: self,
+                bucket: upload.bucket.context(MissingRequiredFields)?,
+                id: upload.upload_id.context(MissingRequiredFields)?,
+                key: upload.key.context(MissingRequiredFields)?,
+                parts: Vec::new(),
+            }
         })
     }
 
     pub async fn upload<R: AsyncRead + Send + Sync + 'static>(
         &mut self,
-        name: String,
+        name: &str,
         data: R,
         md5: Option<impl md5::Digest>,
         size: Option<i64>,
     ) -> Result<Etag, Error> {
-        let res = self
-            .client
-            .put_object(PutObjectRequest {
-                body: Some(read_to_body(data)),
-                bucket: self.bucket.clone(),
-                content_length: size,
-                content_md5: md5.map(|x| base64::encode(x.finalize())),
-                key: name,
-                metadata: None,
-                storage_class: self.storage_class(),
-                ..Default::default()
-            })
-            .await
-            .context(SimpleUploadFailed)?;
-        let etag = res.e_tag.context(MissingRequiredFields)?;
-        Ok(Etag(etag))
+        catch!(err => log!(aws,error: "Failed to upload {:?}: {}", name, err="{:#?}"=>f)
+        {
+            log!(aws: "Begin uploading {:?}", name);
+            let res = self
+                .client
+                .put_object(PutObjectRequest {
+                    body: Some(read_to_body(data)),
+                    bucket: self.bucket.clone(),
+                    content_length: size,
+                    content_md5: md5.map(|x| base64::encode(x.finalize())),
+                    key: name.to_string(),
+                    metadata: None,
+                    storage_class: self.storage_class(),
+                    ..Default::default()
+                })
+                .await
+                .context(SimpleUploadFailed)?;
+            let etag = res.e_tag.context(MissingRequiredFields)?;
+            log!(aws: "{:?} uploaded as {}", name, etag=&etag);
+            Etag(etag)
+        })
     }
 }
 
@@ -179,49 +192,55 @@ impl<'a> MultipartUpload<'a> {
         md5: Option<impl md5::Digest>,
         size: Option<i64>,
     ) -> Result<&UploadedPart, Error> {
-        let number = (self.parts.len() + 1) as i64;
-        let response = self
-            .root
-            .client
-            .upload_part(UploadPartRequest {
-                body: Some(read_to_body(part)),
-                bucket: self.bucket.clone(),
-                content_length: size,
-                content_md5: md5.map(|x| base64::encode(x.finalize())),
-                key: self.key.clone(),
-                part_number: number,
-                upload_id: self.id.clone(),
-                ..Default::default()
-            })
-            .await
-            .context(UploadPartFailed)?;
-        let part = UploadedPart {
-            etag: Etag(response.e_tag.context(MissingRequiredFields)?),
-            number,
-        };
-        self.parts.push(part);
-        Ok(self.parts.last().unwrap())
+        let md5 = md5.map(|x| base64::encode(x.finalize()));
+        catch!(err => log!(aws,error: "Failed to upload part: {}", err="{:#?}"=>f; md5, size)
+        {
+            let number = (self.parts.len() + 1) as i64;
+            let response = self
+                .root
+                .client
+                .upload_part(UploadPartRequest {
+                    body: Some(read_to_body(part)),
+                    bucket: self.bucket.clone(),
+                    content_length: size,
+                    content_md5: md5.clone(),
+                    key: self.key.clone(),
+                    part_number: number,
+                    upload_id: self.id.clone(),
+                    ..Default::default()
+                })
+                .await
+                .context(UploadPartFailed)?;
+            let part = UploadedPart {
+                etag: Etag(response.e_tag.context(MissingRequiredFields)?),
+                number,
+            };
+            self.parts.push(part);
+            self.parts.last().unwrap()
+        })
     }
 
     pub async fn complete(self) -> Result<(), (MultipartUpload<'a>, Error)> {
-        let expected = self.expected_etag();
-        let res = self
-            .root
-            .client
-            .complete_multipart_upload(CompleteMultipartUploadRequest {
-                bucket: self.bucket.clone(),
-                key: self.key.clone(),
-                upload_id: self.id.clone(),
-                ..Default::default()
-            })
-            .await
-            .context(CompleteUploadFailed)
-            .map_err(|e| (self, e))?;
-        let found = res.e_tag.map(Etag);
-        if found != expected {
-            log!(warn: "Unexpected etag in multipart upload: {:?} != {:?}", expected, found);
-        }
-        Ok(())
+        catch!((this, err) => log!(aws,error: "Failed to complete multipart upload #{}: {}", id=this.id, err="{:#?}"=>f)
+        {
+            let expected = self.expected_etag();
+            let res = self
+                .root
+                .client
+                .complete_multipart_upload(CompleteMultipartUploadRequest {
+                    bucket: self.bucket.clone(),
+                    key: self.key.clone(),
+                    upload_id: self.id.clone(),
+                    ..Default::default()
+                })
+                .await
+                .context(CompleteUploadFailed)
+                .map_err(|e| (self, e))?;
+            let found = res.e_tag.map(Etag);
+            if found != expected {
+                log!(warn: "Unexpected etag in multipart upload: {:?} != {:?}", expected, found);
+            }
+        })
     }
 
     pub fn expected_etag(&self) -> Option<Etag> {
