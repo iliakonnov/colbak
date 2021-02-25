@@ -8,6 +8,12 @@ use tokio::io::AsyncRead;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Etag(pub String);
 
+impl Etag {
+    pub fn unhex(&self) -> Option<Vec<u8>> {
+        hex::decode(&self.0).ok()
+    }
+}
+
 pub struct Aws {
     bucket: String,
     client: S3Client,
@@ -36,6 +42,9 @@ pub enum Error {
     },
     CompleteUploadFailed {
         source: rusoto_core::RusotoError<CompleteMultipartUploadError>,
+    },
+    SimpleUploadFailed {
+        source: rusoto_core::RusotoError<PutObjectError>,
     },
 }
 
@@ -94,13 +103,17 @@ impl Aws {
         Ok(())
     }
 
+    fn storage_class(&self) -> Option<String> {
+        Some("DEEP_ARCHIVE".to_string())
+    }
+
     pub async fn begin_upload(&self, name: String) -> Result<MultipartUpload<'_>, Error> {
         let upload = self
             .client
             .create_multipart_upload(CreateMultipartUploadRequest {
                 bucket: self.bucket.clone(),
                 key: name,
-                storage_class: Some("DEEP_ARCHIVE".to_string()),
+                storage_class: self.storage_class(),
                 ..CreateMultipartUploadRequest::default()
             })
             .await
@@ -113,7 +126,39 @@ impl Aws {
             parts: Vec::new(),
         })
     }
+
+    pub async fn upload<R: AsyncRead + Send + Sync + 'static>(
+        &mut self,
+        name: String,
+        data: R,
+        md5: Option<impl md5::Digest>,
+        size: Option<i64>,
+    ) -> Result<Etag, Error> {
+        let res = self
+            .client
+            .put_object(PutObjectRequest {
+                body: Some(read_to_body(data)),
+                bucket: self.bucket.clone(),
+                content_length: size,
+                content_md5: md5.map(|x| base64::encode(x.finalize())),
+                key: name,
+                metadata: None,
+                storage_class: self.storage_class(),
+                ..Default::default()
+            })
+            .await
+            .context(SimpleUploadFailed)?;
+        let etag = res.e_tag.context(MissingRequiredFields)?;
+        Ok(Etag(etag))
+    }
 }
+
+fn read_to_body(reader: impl AsyncRead + Send + Sync + 'static) -> rusoto_core::ByteStream {
+    let stream = tokio_util::codec::FramedRead::new(reader, tokio_util::codec::BytesCodec::new());
+    let stream = stream.map(|x| x.map(|b| b.into()));
+    rusoto_core::ByteStream::new(stream)
+}
+
 pub struct MultipartUpload<'a> {
     root: &'a Aws,
     bucket: String,
@@ -128,23 +173,18 @@ pub struct UploadedPart {
 }
 
 impl<'a> MultipartUpload<'a> {
-    pub async fn upload_part<R>(
+    pub async fn upload_part<R: AsyncRead + Send + Sync + 'static>(
         &mut self,
         part: R,
         md5: Option<impl md5::Digest>,
         size: Option<i64>,
-    ) -> Result<&UploadedPart, Error>
-    where
-        R: AsyncRead + std::marker::Send + Sync + 'static,
-    {
-        let stream = tokio_util::codec::FramedRead::new(part, tokio_util::codec::BytesCodec::new());
-        let stream = stream.map(|x| x.map(|b| b.into()));
+    ) -> Result<&UploadedPart, Error> {
         let number = (self.parts.len() + 1) as i64;
         let response = self
             .root
             .client
             .upload_part(UploadPartRequest {
-                body: Some(rusoto_core::ByteStream::new(stream)),
+                body: Some(read_to_body(part)),
                 bucket: self.bucket.clone(),
                 content_length: size,
                 content_md5: md5.map(|x| base64::encode(x.finalize())),
@@ -188,8 +228,7 @@ impl<'a> MultipartUpload<'a> {
         use digest::Digest;
         let mut digest = md5::Md5::new();
         for part in &self.parts {
-            let decoded = hex::decode(&part.etag.0).ok()?;
-            digest.update(&decoded);
+            digest.update(&part.etag.unhex()?);
         }
         let fin = digest.finalize();
         let res = format!("{:x}-{}", fin, self.parts.len());
