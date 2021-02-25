@@ -1,17 +1,21 @@
 use futures::StreamExt;
 use rusoto_s3::*;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::future::Future;
 use tokio::io::AsyncRead;
 
-struct Aws {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Etag(pub String);
+
+pub struct Aws {
     bucket: String,
     client: S3Client,
     max_parallel: usize,
 }
 
 #[derive(Debug, Snafu)]
-enum Error {
+pub enum Error {
     FailedMany {
         errors: Vec<Error>,
     },
@@ -33,12 +37,6 @@ enum Error {
     CompleteUploadFailed {
         source: rusoto_core::RusotoError<CompleteMultipartUploadError>,
     },
-}
-
-pub struct Finally<T, FOk, FAbort> {
-    value: T,
-    right: FOk,
-    fail: FAbort,
 }
 
 impl Aws {
@@ -112,46 +110,63 @@ impl Aws {
             bucket: upload.bucket.context(MissingRequiredFields)?,
             id: upload.upload_id.context(MissingRequiredFields)?,
             key: upload.key.context(MissingRequiredFields)?,
-            counter: 1,
+            parts: Vec::new(),
         })
     }
 }
-
-struct MultipartUpload<'a> {
+pub struct MultipartUpload<'a> {
     root: &'a Aws,
     bucket: String,
     id: String,
     key: String,
-    counter: u16,
+    parts: Vec<UploadedPart>,
+}
+
+pub struct UploadedPart {
+    pub etag: Etag,
+    pub number: i64,
 }
 
 impl<'a> MultipartUpload<'a> {
-    async fn upload_part<R: 'static>(&mut self, part: R) -> Result<(), Error>
+    pub async fn upload_part<R>(
+        &mut self,
+        part: R,
+        md5: Option<impl md5::Digest>,
+        size: Option<i64>,
+    ) -> Result<&UploadedPart, Error>
     where
-        R: AsyncRead + std::marker::Send + Sync,
+        R: AsyncRead + std::marker::Send + Sync + 'static,
     {
         let stream = tokio_util::codec::FramedRead::new(part, tokio_util::codec::BytesCodec::new());
         let stream = stream.map(|x| x.map(|b| b.into()));
-        self.root
+        let number = (self.parts.len() + 1) as i64;
+        let response = self
+            .root
             .client
             .upload_part(UploadPartRequest {
                 body: Some(rusoto_core::ByteStream::new(stream)),
                 bucket: self.bucket.clone(),
-                content_length: None,
-                content_md5: None,
+                content_length: size,
+                content_md5: md5.map(|x| base64::encode(x.finalize())),
                 key: self.key.clone(),
-                part_number: self.counter as _,
+                part_number: number,
                 upload_id: self.id.clone(),
                 ..Default::default()
             })
             .await
             .context(UploadPartFailed)?;
-        self.counter += 1;
-        Ok(())
+        let part = UploadedPart {
+            etag: Etag(response.e_tag.context(MissingRequiredFields)?),
+            number,
+        };
+        self.parts.push(part);
+        Ok(self.parts.last().unwrap())
     }
 
-    async fn complete(self) -> Result<(), (MultipartUpload<'a>, Error)> {
-        self.root
+    pub async fn complete(self) -> Result<(), (MultipartUpload<'a>, Error)> {
+        let expected = self.expected_etag();
+        let res = self
+            .root
             .client
             .complete_multipart_upload(CompleteMultipartUploadRequest {
                 bucket: self.bucket.clone(),
@@ -162,6 +177,22 @@ impl<'a> MultipartUpload<'a> {
             .await
             .context(CompleteUploadFailed)
             .map_err(|e| (self, e))?;
+        let found = res.e_tag.map(Etag);
+        if found != expected {
+            log!(warn: "Unexpected etag in multipart upload: {:?} != {:?}", expected, found);
+        }
         Ok(())
+    }
+
+    pub fn expected_etag(&self) -> Option<Etag> {
+        use digest::Digest;
+        let mut digest = md5::Md5::new();
+        for part in &self.parts {
+            let decoded = hex::decode(&part.etag.0).ok()?;
+            digest.update(&decoded);
+        }
+        let fin = digest.finalize();
+        let res = format!("{:x}-{}", fin, self.parts.len());
+        Some(Etag(res))
     }
 }
