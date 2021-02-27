@@ -130,10 +130,12 @@ macro_rules! log {
 macro_rules! catch {
     {
         $err:pat => log!($($args:tt)*)
-        {$($body:tt)*}
+        $($lt:lifetime :)? {$($body:tt)*}
     } => {{
         let res = try {
-            $($body)*
+            $($lt :)? {
+                $($body)*
+            }
         };
         match &res {
             Ok(_) => (),

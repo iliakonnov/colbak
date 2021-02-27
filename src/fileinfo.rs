@@ -38,10 +38,11 @@ pub enum UnspecifiedInfo {
     Unknown(UnknownInfo),
 }
 
+#[repr(u8, C)]
 pub enum InfoKind<P: PathKind> {
-    File(Info<P, FileInfo>),
-    Dir(Info<P, DirInfo>),
-    Unknown(Info<P, UnknownInfo>),
+    File(Info<P, FileInfo>) = 1,
+    Dir(Info<P, DirInfo>) = 2,
+    Unknown(Info<P, UnknownInfo>) = u8::MAX,
 }
 
 #[repr(C)]
@@ -56,6 +57,21 @@ impl FileIdentifier {
     pub fn as_bytes(&self) -> &[u8] {
         let ptr = self as *const _ as *const _;
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()) }
+    }
+}
+
+impl<K: PathKind> Info<K, UnspecifiedInfo> {
+    pub fn identifier(&self) -> Option<FileIdentifier> {
+        match &self.data {
+            UnspecifiedInfo::File(f) => Some(FileIdentifier {
+                inode: self.inode,
+                ctime: self.ctime.unix_timestamp_nanos(),
+                size: f.size,
+                mtime: self.mtime.unix_timestamp_nanos(),
+            }),
+            UnspecifiedInfo::Dir(_) => None,
+            UnspecifiedInfo::Unknown(_) => None,
+        }
     }
 }
 

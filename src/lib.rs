@@ -1,4 +1,5 @@
 #![feature(type_alias_impl_trait, backtrace, type_ascription, never_type, min_specialization, try_blocks)]
+#![feature(arbitrary_enum_discriminant)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
