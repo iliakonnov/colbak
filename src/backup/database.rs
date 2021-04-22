@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::fileinfo::Info;
 use crate::path::EncodedPath;
@@ -7,7 +7,6 @@ use crate::path::External;
 use fallible_iterator::FallibleIterator;
 use rusqlite::{named_params, params};
 use snafu::IntoError;
-use snafu::OptionExt;
 use snafu::{ensure, ResultExt, Snafu};
 
 #[derive(Debug, Snafu)]
@@ -24,27 +23,48 @@ pub enum Error {
         source: walkdir::Error,
     },
     CantBuildDiffName {
+        source: NotAValidSqlName,
         before: SqlName,
         after: SqlName,
     },
+    CantBuildPath {
+        str: std::ffi::OsString,
+        backtrace: snafu::Backtrace,
+    },
     TooManySnapshots,
     TooManyRows,
-    DatabasesMixed,
+    DatabasesMixed {
+        backtrace: snafu::Backtrace,
+    },
+}
+
+#[derive(Debug, Snafu)]
+pub struct NotAValidSqlName {
+    name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SqlName(String);
 
 impl SqlName {
-    pub fn new(name: String) -> Option<SqlName> {
-        if name
-            .chars()
-            .all(|c| matches!(c, '1'..='9' | 'A'..='Z' | 'a'..='z'))
+    pub fn new(name: String) -> Result<SqlName, NotAValidSqlName> {
+        let mut chars = name.chars();
+        if matches!(chars.next(), Some('A'..='Z' | 'a'..='z'))
+            && chars.all(|c| matches!(c, '0'..='9' | 'A'..='Z' | 'a'..='z' | '_'))
         {
-            Some(SqlName(name))
+            Ok(SqlName(name))
         } else {
-            None
+            Err(NotAValidSqlName { name })
         }
+    }
+
+    pub fn now() -> SqlName {
+        let name = time::OffsetDateTime::now_utc().format("at%Y_%m_%d_%H_%M_%S_%N");
+        SqlName::new(name).unwrap()
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 
@@ -75,34 +95,50 @@ fn generate_id(table_id: u64, row_id: u64) -> Result<u64, Error> {
 pub struct Database {
     snapshot_count: usize,
     conn: rusqlite::Connection,
+    root: PathBuf,
 }
 
 impl Database {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
-        let db = rusqlite::Connection::open(path).context(SqliteFailed)?;
+    fn attach(&self, name: &SqlName) -> Result<String, Error> {
+        let mut root = self.root.clone();
+        root.push(name.as_str());
+        root.set_extension("db");
+        let path = root
+            .into_os_string()
+            .into_string()
+            .map_err(|str| CantBuildPath { str }.build())?;
+        Ok(format!("ATTACH DATABASE '{path}' AS {name}"))
+    }
+
+    pub fn open<P: AsRef<Path>>(root: P) -> Result<Self, Error> {
+        let mut root = root.as_ref().to_owned();
+        root.push("db.sqlite3");
+        let db = rusqlite::Connection::open(&root).context(SqliteFailed)?;
+        root.pop();
+
         db.execute(
             "CREATE TABLE IF NOT EXISTS snapshots (
-            name TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            filled_at DATETIME,
-            closed_at DATETIME
-        ",
+                name TEXT NOT NULL,
+                created_at DATETIME NOT NULL,
+                filled_at DATETIME
+            )",
             params![],
         )
         .context(SqliteFailed)?;
         let snapshot_count = db
-            .execute("SELECT COUNT(*) FROM snapshots", params![])
+            .query_row("SELECT COUNT(*) FROM snapshots", params![], |r| r.get(0))
             .context(SqliteFailed)?;
         Ok(Self {
             snapshot_count,
             conn: db,
+            root,
         })
     }
 
     pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot, Error> {
         // Attach database:
         self.conn
-            .execute(&format!("ATTACH DATABASE {name}.db AS {name}"), params![])
+            .execute(&self.attach(&name)?, params![])
             .context(SqliteFailed)?;
         // Maybe we should create a table then.
         let is_exists = self
@@ -125,18 +161,18 @@ impl Database {
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         path STRING,
                         identifier BLOB,   /* binary data */
-                        info TEXT NOT NULL /* json */
+                        info TEXT          /* json */
                     );
-                    INSERT INTO snap(id) VALUES ({first_id});
-                    DELETE FROM snap WHERE id={first_id};
+                    INSERT INTO {name}.snap(id) VALUES ({first_id});
+                    DELETE FROM {name}.snap WHERE id={first_id};
                 "
             ))
             .context(SqliteFailed)?;
-            txn.execute_named(
+            txn.execute(
                 "INSERT INTO snapshots(name, created_at) VALUES (:name, :created_at)",
                 named_params![
                     ":name": name.0,
-                    "created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+                    ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
                 ],
             )
             .context(SqliteFailed)?;
@@ -178,7 +214,7 @@ impl Snapshot<'_> {
         {
             let mut stmt = txn
                 .prepare(&format!(
-                    "INSERT INTO {0}.snap(id, path, identifier, info)
+                    "INSERT INTO {0}.snap(path, identifier, info)
                     VALUES(:path, :identifier, :info)",
                     self.name
                 ))
@@ -188,7 +224,7 @@ impl Snapshot<'_> {
                 let metadata = i.metadata().context(CantWalkdir)?;
                 let path = EncodedPath::from_path(i.into_path());
                 let info = Info::with_metadata(path, metadata);
-                stmt.execute_named(named_params![
+                stmt.execute(named_params![
                     ":path": info.path.as_bytes(),
                     ":identifier": info.identifier().as_ref().map(|i| i.as_bytes()),
                     ":info": serde_json::to_string(&info).context(JsonFailed)?,
@@ -196,6 +232,14 @@ impl Snapshot<'_> {
                 .context(SqliteFailed)?;
             }
         }
+        txn.execute(
+            "UPDATE snapshots SET filled_at=? WHERE name=?",
+            params![
+                time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+                self.name.as_str()
+            ],
+        )
+        .context(SqliteFailed)?;
         txn.commit().context(SqliteFailed)?;
         Ok(())
     }
@@ -226,7 +270,7 @@ impl<'a> Diff<'a> {
     pub fn new(db: &'a Database, name: SqlName) -> Result<Self, Error> {
         {
             db.conn
-                .execute(&format!("ATTACH DATABASE {name}.db AS {name}"), params![])
+                .execute(&db.attach(&name)?, params![])
                 .context(SqliteFailed)?;
             db.conn
                 .execute(

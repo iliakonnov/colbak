@@ -1,5 +1,3 @@
-#![feature(backtrace)]
-
 use awsync_lib::*;
 use std::path::PathBuf;
 
@@ -16,36 +14,39 @@ enum Opt {
         archive: PathBuf,
         destination: PathBuf,
     },
-    Tree {
-        target: PathBuf,
+    Snapshot {
+        db: PathBuf,
         root: PathBuf,
     },
 }
 
-async fn entry_point(opt: Opt) -> Result<(), Box<dyn std::error::Error>> {
+async fn entry_point(opt: Opt) -> Result<(), TopError> {
     match opt {
         Opt::CpioCreate {
             archive: dest,
             files,
-        } => awsync_lib::create_cpio(dest, files).await,
+        } => create_cpio(dest, files).await,
         Opt::CpioExtract {
-            archive: src,
+            archive,
             destination,
-        } => extract_cpio(src, destination).await,
-        Opt::Tree { target: _, root: _ } => Ok(()),
+        } => extract_cpio(archive, destination).await,
+        Opt::Snapshot { db, root } => create_snapshot(db, root).await,
     }
 }
 
 #[tokio::main]
 async fn main() {
+    color_backtrace::install();
+
     let opt = Opt::from_args();
     if let Err(e) = entry_point(opt).await {
         eprintln!("ERROR!");
         eprintln!("{}", e);
 
-        if let Some(trace) = e.backtrace() {
-            eprintln!("\nTRACE:");
-            eprintln!("{}", trace);
+        if let Some(trace) = snafu::ErrorCompat::backtrace(&e) {
+            color_backtrace::BacktracePrinter::new()
+                .print_trace(trace, &mut color_backtrace::default_output_stream())
+                .unwrap();
         } else {
             eprintln!("\nTrace missing :(");
         }

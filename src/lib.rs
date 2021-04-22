@@ -1,6 +1,5 @@
 #![feature(
     min_type_alias_impl_trait,
-    backtrace,
     type_ascription,
     never_type,
     min_specialization,
@@ -11,6 +10,7 @@
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
+use snafu::{Backtrace, Snafu};
 use std::path::PathBuf;
 pub use time::OffsetDateTime as DateTime;
 
@@ -25,7 +25,31 @@ pub mod path;
 pub mod serde_b64;
 pub mod types;
 
-type CommandResult = Result<(), Box<dyn std::error::Error>>;
+type CommandResult = Result<(), TopError>;
+
+#[derive(Debug, Snafu)]
+pub enum TopError {
+    #[snafu(context(false))]
+    TokioIo {
+        source: tokio::io::Error,
+        backtrace: Backtrace,
+    },
+    #[snafu(context(false))]
+    CpioReadingError {
+        source: cpio::reader::ReadingError,
+        backtrace: Backtrace,
+    },
+    #[snafu(context(false))]
+    CpioReadError {
+        source: cpio::reader::ReadError,
+        backtrace: Backtrace,
+    },
+    #[snafu(context(false))]
+    DbOpenError {
+        source: backup::database::Error,
+        backtrace: Backtrace,
+    },
+}
 
 pub async fn create_cpio(dest: PathBuf, files: Vec<PathBuf>) -> CommandResult {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -63,5 +87,14 @@ pub async fn extract_cpio(src: PathBuf, _dst: PathBuf) -> CommandResult {
         };
     };
     println!("{:#?}", files);
+    Ok(())
+}
+
+pub async fn create_snapshot(db: PathBuf, root: PathBuf) -> CommandResult {
+    use backup::database::*;
+    let mut db = Database::open(db)?;
+    let name = SqlName::now();
+    let snap = db.open_snapshot(name)?;
+    let () = snap.fill(root)?;
     Ok(())
 }

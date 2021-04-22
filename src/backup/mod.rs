@@ -1,2 +1,2 @@
-mod aws;
-mod database;
+pub mod aws;
+pub mod database;

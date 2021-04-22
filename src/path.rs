@@ -63,7 +63,7 @@ static_assertions::const_assert!(std::path::MAIN_SEPARATOR.is_ascii());
 impl EncodedPath<Local> {
     pub fn from_path(path: PathBuf) -> Self {
         let os = path.into_os_string();
-        let vec = os_str_bytes::OsStringBytes::into_vec(os);
+        let vec = os_str_bytes::OsStringBytes::into_raw_vec(os);
         EncodedPath::from_vec(vec).cast_to()
     }
 
@@ -74,7 +74,7 @@ impl EncodedPath<Local> {
                 *i = std::path::MAIN_SEPARATOR as u8;
             }
         }
-        os_str_bytes::OsStringBytes::from_vec(vec)
+        os_str_bytes::OsStringBytes::from_raw_vec(vec)
     }
 }
 
