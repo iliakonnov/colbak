@@ -1,10 +1,10 @@
 use once_cell::sync::OnceCell;
-use serde::{Serialize, Deserialize};
-use time::OffsetDateTime;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use time::OffsetDateTime;
 
 pub struct Logging {
     // Creating json_serde::Serializer is cheap.
@@ -40,10 +40,7 @@ pub fn get_log(
     })
 }
 
-pub fn write_log(
-    this: &'static Mutex<Logging>,
-    data: &[u8]
-) {
+pub fn write_log(this: &'static Mutex<Logging>, data: &[u8]) {
     let mut this = this.lock().unwrap();
     this.json.write_all(&[b'\n']).unwrap();
     this.json.write_all(data).unwrap();
@@ -57,7 +54,7 @@ pub struct LogEntry<T> {
     pub position: (u32, u32),
     pub time: OffsetDateTime,
     pub message: &'static str,
-    pub inner: T
+    pub inner: T,
 }
 
 #[macro_export]

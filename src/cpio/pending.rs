@@ -12,7 +12,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::fs::File;
-use tokio::io::{AsyncRead};
+use tokio::io::AsyncRead;
 
 enum State {}
 

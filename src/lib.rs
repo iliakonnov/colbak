@@ -1,22 +1,29 @@
-#![feature(type_alias_impl_trait, backtrace, type_ascription, never_type, min_specialization, try_blocks)]
-#![feature(arbitrary_enum_discriminant)]
+#![feature(
+    min_type_alias_impl_trait,
+    backtrace,
+    type_ascription,
+    never_type,
+    min_specialization,
+    try_blocks,
+    arbitrary_enum_discriminant,
+    format_args_capture
+)]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
 use std::path::PathBuf;
 pub use time::OffsetDateTime as DateTime;
 
-
 #[macro_use]
 pub mod logging;
 
+pub mod backup;
 pub mod cpio;
 pub mod fileext;
 pub mod fileinfo;
 pub mod path;
 pub mod serde_b64;
 pub mod types;
-pub mod backup;
 
 type CommandResult = Result<(), Box<dyn std::error::Error>>;
 

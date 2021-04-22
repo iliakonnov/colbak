@@ -9,7 +9,7 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
     // For 11 bytes we need 57, but that is too much.
     let digits = b'0'..b'9'; // 10
     let upper = b'A'..b'Z'; // 25
-    // 6 more chars:
+                            // 6 more chars:
     let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
 
     let alphabet = additional
@@ -158,12 +158,14 @@ impl EscapedString for [u8] {
         let mut result = String::new();
         loop {
             match std::str::from_utf8(remaining) {
-                Ok(x) => return if result.is_empty() {
-                    Cow::Borrowed(x)
-                } else {
-                    result.push_str(x);
-                    Cow::Owned(result)
-                },
+                Ok(x) => {
+                    return if result.is_empty() {
+                        Cow::Borrowed(x)
+                    } else {
+                        result.push_str(x);
+                        Cow::Owned(result)
+                    }
+                }
                 Err(err) => {
                     let (valid, bad) = remaining.split_at(err.valid_up_to());
                     let (bad, rest) = bad.split_at(err.error_len().unwrap_or(0));

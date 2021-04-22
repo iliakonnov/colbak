@@ -15,6 +15,8 @@ path = "src/main.rs"
 [dependencies]
 structopt = "0.3.21"
 once_cell = "1.5.2"
+fallible-iterator = "0.2"
+owning_ref = "0.4.1"
 snafu = { version = "0.6.10", default-features = false, features = ["std", "unstable-backtraces-impl-std"] }
 futures = "0.3.12"
 tokio = { version = "1.2", features = ["full"] }

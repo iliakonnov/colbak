@@ -2,7 +2,7 @@ use super::pending::{OpeningReadFuture, Pending, PendingReader};
 use super::smart_read::SmartReadExt;
 use super::smart_read::SmartWrap;
 use super::state_machine::*;
-use crate::cpio::smart_read::{SmartBuf, SmartRead, SmartReader};
+use crate::cpio::smart_read::{SmartBuf, SmartRead};
 use crate::cpio::Archive;
 use either::Either;
 use pin_project_lite::pin_project;
@@ -36,7 +36,8 @@ impl Reader<'_> {
                 archive: archive as *mut _,
                 phantom: Default::default(),
                 position: 0,
-            }).wrap(),
+            })
+            .wrap(),
         }
     }
 }
