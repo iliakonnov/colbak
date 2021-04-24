@@ -2,15 +2,17 @@
     min_type_alias_impl_trait,
     type_ascription,
     never_type,
+    exhaustive_patterns,
     min_specialization,
     try_blocks,
     arbitrary_enum_discriminant,
-    format_args_capture
+    format_args_capture,
+    backtrace
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code)]
 
-use snafu::{Backtrace, Snafu};
+use snafu::Snafu;
 use std::path::PathBuf;
 pub use time::OffsetDateTime as DateTime;
 
@@ -30,24 +32,16 @@ type CommandResult = Result<(), TopError>;
 #[derive(Debug, Snafu)]
 pub enum TopError {
     #[snafu(context(false))]
-    TokioIo {
-        source: tokio::io::Error,
-        backtrace: Backtrace,
-    },
+    TokioIo { source: tokio::io::Error },
     #[snafu(context(false))]
-    CpioReadingError {
-        source: cpio::reader::ReadingError,
-        backtrace: Backtrace,
-    },
+    CpioReadingError { source: cpio::reader::ReadingError },
     #[snafu(context(false))]
-    CpioReadError {
-        source: cpio::reader::ReadError,
-        backtrace: Backtrace,
-    },
+    CpioReadError { source: cpio::reader::ReadError },
     #[snafu(context(false))]
-    DbOpenError {
-        source: backup::database::Error,
-        backtrace: Backtrace,
+    DbOpenError { source: backup::database::Error },
+    #[snafu(context(false))]
+    InvalidSnapshotName {
+        source: backup::database::NotAValidSqlName,
     },
 }
 
@@ -95,6 +89,24 @@ pub async fn create_snapshot(db: PathBuf, root: PathBuf) -> CommandResult {
     let mut db = Database::open(db)?;
     let name = SqlName::now();
     let snap = db.open_snapshot(name)?;
-    let () = snap.fill(root)?;
+    let () = snap.fill(&root)?;
+    println!("{}", snap.name());
+    Ok(())
+}
+
+pub async fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResult {
+    use backup::database::*;
+    use path::EscapedString;
+    let db = Database::open(db)?;
+
+    let before = db.readonly_snapshot(SqlName::new(before)?)?;
+    let after = db.readonly_snapshot(SqlName::new(after)?)?;
+
+    let diff = db.compare_snapshots(&before, &after)?;
+    let _ = diff.for_each::<_, !>(|kind, info| {
+        println!("{:?}: {}", kind, info.path.escaped());
+        Ok(())
+    })?;
+
     Ok(())
 }

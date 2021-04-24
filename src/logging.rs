@@ -21,6 +21,8 @@ pub mod groups {
     pub static error: OnceCell<Mutex<Logging>> = OnceCell::new();
     pub static aws: OnceCell<Mutex<Logging>> = OnceCell::new();
     pub static cli: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static fmt_sql: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static time: OnceCell<Mutex<Logging>> = OnceCell::new();
 }
 
 pub fn get_log(
