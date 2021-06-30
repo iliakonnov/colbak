@@ -90,7 +90,7 @@ pub async fn create_snapshot(db: PathBuf, root: PathBuf) -> CommandResult {
     let mut db = Database::open(db)?;
     let name = SqlName::now();
     let mut snap = db.open_snapshot(name)?;
-    let () = snap.fill(&root)?;
+    snap.filler()?.fill(&root)?.save()?;
     println!("{}", snap.name());
     Ok(())
 }

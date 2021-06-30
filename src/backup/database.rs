@@ -1,4 +1,4 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::path::{Path, PathBuf};
 
 use crate::fileinfo::Info;
@@ -240,6 +240,7 @@ pub struct Snapshot<D: Borrow<Database>> {
     name: SqlName,
 }
 
+#[must_use]
 pub struct SnapshotFiller<'a> {
     snap_name: &'a SqlName,
     transaction: rusqlite::Transaction<'a>,
@@ -247,14 +248,14 @@ pub struct SnapshotFiller<'a> {
 }
 
 impl<'a> SnapshotFiller<'a> {
-    pub fn new(snapshot: &'a mut Snapshot<&'a mut Database>) -> Result<Self, Error> {
-        let txn = snapshot.db.conn.transaction().context(SqliteFailed)?;
+    pub fn new<D: BorrowMut<Database>>(snapshot: &'a mut Snapshot<D>) -> Result<Self, Error> {
+        let mut txn = snapshot.db.borrow_mut().conn.transaction().context(SqliteFailed)?;
+        txn.set_drop_behavior(rusqlite::DropBehavior::Rollback);
         let sql = fmt_sql!(
             "INSERT INTO {0}.snap(path, identifier, info)
             VALUES(:path, :identifier, :info)",
             snapshot.name
         );
-        txn.prepare_cached(&sql).context(SqliteFailed)?;
         Ok(SnapshotFiller {
             snap_name: &snapshot.name,
             transaction: txn,
@@ -267,51 +268,48 @@ impl<'a> SnapshotFiller<'a> {
             .prepare_cached(&self.sql)
             .context(SqliteFailed)
     }
-}
 
-impl Drop for SnapshotFiller<'_> {
-    fn drop(&mut self) {
-        // FIXME: Why do I need SnapshotFiller?
+    pub fn add(&self, entry: walkdir::DirEntry) -> Result<(), Error> {
+        let metadata = entry.metadata().context(CantWalkdir)?;
+        let path = EncodedPath::from_path(entry.into_path());
+        let info = Info::with_metadata(path, metadata);
+        self.get_statement()?.execute(named_params![
+            ":path": info.path.as_bytes(),
+            ":identifier": info.identifier().as_ref().map(|i| i.as_bytes()).unwrap_or_default(),
+            ":info": serde_json::to_string(&info).context(JsonFailed)?,
+        ])
+        .context(SqliteFailed)?;
+        Ok(())
     }
-}
 
-impl<'a> Snapshot<&'a mut Database> {
-    pub fn fill(&mut self, root: &Path) -> Result<(), Error> {
-        let walk = walkdir::WalkDir::new(root).into_iter();
-        log!(time: "Walking over {}", root = root.to_string_lossy());
-        let txn = self.db.conn.unchecked_transaction().context(SqliteFailed)?;
-        {
-            let mut stmt = txn
-                .prepare(&fmt_sql!(
-                    "INSERT INTO {0}.snap(path, identifier, info)
-                    VALUES(:path, :identifier, :info)",
-                    self.name
-                ))
-                .context(SqliteFailed)?;
-            for i in walk {
-                let i = i.context(CantWalkdir)?;
-                let metadata = i.metadata().context(CantWalkdir)?;
-                let path = EncodedPath::from_path(i.into_path());
-                let info = Info::with_metadata(path, metadata);
-                stmt.execute(named_params![
-                    ":path": info.path.as_bytes(),
-                    ":identifier": info.identifier().as_ref().map(|i| i.as_bytes()).unwrap_or_default(),
-                    ":info": serde_json::to_string(&info).context(JsonFailed)?,
-                ])
-                .context(SqliteFailed)?;
-            }
-        }
-        txn.execute(
+    pub fn save(self) -> Result<(), Error> {
+        self.transaction.execute(
             "UPDATE snapshots SET filled_at=? WHERE name=?",
             params![
                 time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
-                self.name.as_str()
+                self.snap_name.as_str()
             ],
         )
         .context(SqliteFailed)?;
-        txn.commit().context(SqliteFailed)?;
-        log!(time: "Done walking ({})", root = root.to_string_lossy());
+        self.transaction.commit().context(SqliteFailed)?;
         Ok(())
+    }
+
+    pub fn fill(self, root: &Path) -> Result<Self, Error> {
+        log!(time: "Walking over {}", root = root.to_string_lossy());
+        let walk = walkdir::WalkDir::new(root).into_iter();
+        for entry in walk {
+            let entry = entry.context(CantWalkdir)?;
+            self.add(entry)?;
+        }
+        log!(time: "Done walking ({})", root = root.to_string_lossy());
+        Ok(self)
+    }
+}
+
+impl<'a, D: BorrowMut<Database>> Snapshot<D> {
+    pub fn filler(&mut self) -> Result<SnapshotFiller, Error> {
+        SnapshotFiller::new(self)
     }
 }
 
@@ -324,7 +322,9 @@ impl<'a, D: Borrow<Database>> Snapshot<D> {
 impl<'a, D: Borrow<Database>> Drop for Snapshot<D> {
     fn drop(&mut self) {
         let db: &Database = self.db.borrow();
-        let _ = db.conn.execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
+        let _ = db
+            .conn
+            .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
     }
 }
 
