@@ -113,14 +113,13 @@ pub fn create_snapshot(db: PathBuf, root: &Path) -> CommandResult {
 
 pub fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResult {
     use backup::database::{Database, SqlName};
-    use path::EscapedString;
     let db = Database::open(db)?;
 
     let before = db.readonly_snapshot(SqlName::new(before)?)?;
     let after = db.readonly_snapshot(SqlName::new(after)?)?;
     let diff = db.compare_snapshots(&before, &after)?;
-    let _ = diff.for_each::<_, !>(|kind, info| {
-        println!("{:?}: {}", kind, info.path.escaped());
+    let _ = diff.for_each::<_, !>(|row| {
+        println!("{:?}", row);
         Ok(())
     })?;
 

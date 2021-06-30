@@ -43,6 +43,7 @@ pub enum Error {
     WrongDiffType {
         found: u8,
     },
+    InvalidDiffRow,
     #[snafu(display("It looks like you have mixed different databases: this=0x{:x}, before=0x{:x}, after=0x{:x}", this, before, after))]
     DatabasesMixed {
         backtrace: snafu::Backtrace,
@@ -139,7 +140,7 @@ impl Database {
                 name TEXT NOT NULL,
                 created_at DATETIME NOT NULL,
                 filled_at DATETIME,
-                uploaded BOOLEAN
+                is_uploaded BOOLEAN
             )",
             params![],
         )
@@ -227,13 +228,7 @@ impl Database {
                 }
             );
         }
-        let name = SqlName::new(format!("diff_{}_vs_{}", &before.name, &after.name)).context(
-            CantBuildDiffName {
-                before: &before.name,
-                after: &after.name,
-            },
-        )?;
-        let diff = Diff::new(self, name)?;
+        let diff = Diff::new(self, before.name.clone(), after.name.clone())?;
         diff.fill(before, after)?;
         Ok(diff)
     }
@@ -253,7 +248,12 @@ pub struct SnapshotFiller<'a> {
 
 impl<'a> SnapshotFiller<'a> {
     pub fn new<D: BorrowMut<Database>>(snapshot: &'a mut Snapshot<D>) -> Result<Self, Error> {
-        let mut txn = snapshot.db.borrow_mut().conn.transaction().context(SqliteFailed)?;
+        let mut txn = snapshot
+            .db
+            .borrow_mut()
+            .conn
+            .transaction()
+            .context(SqliteFailed)?;
         txn.set_drop_behavior(rusqlite::DropBehavior::Rollback);
         let sql = fmt_sql!(
             "INSERT INTO {0}.snap(path, identifier, info)
@@ -287,14 +287,15 @@ impl<'a> SnapshotFiller<'a> {
     }
 
     pub fn save(self) -> Result<(), Error> {
-        self.transaction.execute(
-            "UPDATE snapshots SET filled_at=? WHERE name=?",
-            params![
-                time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
-                self.snap_name.as_str()
-            ],
-        )
-        .context(SqliteFailed)?;
+        self.transaction
+            .execute(
+                "UPDATE snapshots SET filled_at=? WHERE name=?",
+                params![
+                    time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+                    self.snap_name.as_str()
+                ],
+            )
+            .context(SqliteFailed)?;
         self.transaction.commit().context(SqliteFailed)?;
         Ok(())
     }
@@ -335,6 +336,8 @@ impl<'a, D: Borrow<Database>> Drop for Snapshot<D> {
 pub struct Diff<'a> {
     db: &'a Database,
     name: SqlName,
+    before_snap: SqlName,
+    after_snap: SqlName,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
@@ -352,8 +355,39 @@ impl DiffType {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DiffRow {
+    Deleted {
+        before: Info<External>,
+    },
+    Created {
+        after: Info<External>,
+    },
+    Changed {
+        before: Info<External>,
+        after: Info<External>,
+    },
+}
+
+impl DiffRow {
+    #[must_use]
+    pub fn kind(&self) -> DiffType {
+        match self {
+            DiffRow::Deleted { .. } => DiffType::Deleted,
+            DiffRow::Created { .. } => DiffType::Created,
+            DiffRow::Changed { .. } => DiffType::Changed,
+        }
+    }
+}
+
 impl<'a> Diff<'a> {
-    pub fn new(db: &'a Database, name: SqlName) -> Result<Self, Error> {
+    pub fn new(db: &'a Database, before_snap: SqlName, after_snap: SqlName) -> Result<Self, Error> {
+        let name = SqlName::new(format!("diff_{}_vs_{}", &before_snap, &after_snap)).context(
+            CantBuildDiffName {
+                before: &before_snap,
+                after: &after_snap,
+            },
+        )?;
         {
             db.conn
                 .execute(&db.attach(&name)?, params![])
@@ -365,8 +399,7 @@ impl<'a> Diff<'a> {
                         CREATE TABLE IF NOT EXISTS {name}.diff (
                             before INTEGER,  -- REFERENCES <before>.snap(id)
                             after  INTEGER,  -- REFERENCES <after>.snap(id),
-                            type   INTEGER,  -- see `DiffType`
-                            info   TEXT      -- same as snap.info 
+                            type   INTEGER   -- see `DiffType`
                         )
                         "
                     ),
@@ -374,7 +407,12 @@ impl<'a> Diff<'a> {
                 )
                 .context(SqliteFailed)?;
         }
-        Ok(Diff { db, name })
+        Ok(Diff {
+            db,
+            name,
+            before_snap,
+            after_snap,
+        })
     }
 
     pub fn fill<D1: Borrow<Database>, D2: Borrow<Database>>(
@@ -382,18 +420,18 @@ impl<'a> Diff<'a> {
         before: &Snapshot<D1>,
         after: &Snapshot<D2>,
     ) -> Result<(), Error> {
-        let b = &before.name;
-        let a = &after.name;
+        let before = &before.name;
+        let after = &after.name;
 
         {
             self.db
                 .conn
                 .execute_batch(&fmt_sql!(
                     "
-                    CREATE INDEX IF NOT EXISTS {a}.idx_ident ON snap ( identifier );
-                    CREATE INDEX IF NOT EXISTS {b}.idx_ident ON snap ( identifier );
-                    CREATE INDEX IF NOT EXISTS {a}.idx_info ON snap ( info );
-                    CREATE INDEX IF NOT EXISTS {b}.idx_info ON snap ( info );
+                    CREATE INDEX IF NOT EXISTS {after}.idx_ident ON snap ( identifier );
+                    CREATE INDEX IF NOT EXISTS {before}.idx_ident ON snap ( identifier );
+                    CREATE INDEX IF NOT EXISTS {after}.idx_info ON snap ( info );
+                    CREATE INDEX IF NOT EXISTS {before}.idx_info ON snap ( info );
                 "
                 ))
                 .context(SqliteFailed)?;
@@ -409,34 +447,31 @@ impl<'a> Diff<'a> {
                 r#"
                     DELETE FROM {name}.diff;
 
-                    INSERT INTO {name}.diff (before, after, type, info)
+                    INSERT INTO {name}.diff (before, after, type)
                     SELECT
                         id,
                         NULL,
-                        {deleted},
-                        info
-                    FROM {b}.snap
-                    WHERE identifier NOT IN (SELECT identifier FROM {a}.snap);
+                        {deleted}
+                    FROM {before}.snap
+                    WHERE identifier NOT IN (SELECT identifier FROM {after}.snap);
 
-                    INSERT INTO {name}.diff (before, after, type, info)
+                    INSERT INTO {name}.diff (before, after, type)
                     SELECT
                         NULL,
                         id,
-                        {created},
-                        info
-                    FROM {a}.snap
-                    WHERE identifier NOT IN (SELECT identifier FROM {b}.snap);
+                        {created}
+                    FROM {after}.snap
+                    WHERE identifier NOT IN (SELECT identifier FROM {before}.snap);
 
-                    INSERT INTO {name}.diff (before, after, type, info)
+                    INSERT INTO {name}.diff (before, after, type)
                     SELECT
-                        {b}.snap.id,
-                        {a}.snap.id,
-                        {changed},
-                        {a}.snap.info
-                    FROM {a}.snap
-                        INNER JOIN {b}.snap
+                        {before}.snap.id,
+                        {after}.snap.id,
+                        {changed}
+                    FROM {after}.snap
+                        INNER JOIN {before}.snap
                         USING (identifier)
-                    WHERE {a}.snap.info != {b}.snap.info;
+                    WHERE {after}.snap.info != {before}.snap.info;
                 "#
             ))
             .context(SqliteFailed)?;
@@ -444,20 +479,37 @@ impl<'a> Diff<'a> {
         Ok(())
     }
 
+    fn load_info(
+        &'a self,
+        source: &SqlName,
+        id: Option<u64>,
+    ) -> Result<Option<Info<External>>, Error> {
+        let id = match id {
+            Some(x) => x,
+            None => return Ok(None),
+        };
+        let json: String = self
+            .db
+            .conn
+            .query_row(
+                &fmt_sql!("SELECT INFO FROM {source}.snap WHERE id=?"),
+                params![id],
+                |row| row.get(0),
+            )
+            .context(SqliteFailed)?;
+        let info = serde_json::from_str(&json).context(JsonFailed)?;
+        Ok(Some(info))
+    }
+
     pub fn for_each<F, E>(&'a self, mut func: F) -> Result<Result<(), E>, Error>
     where
-        F: FnMut(DiffType, Info<External>) -> Result<(), E>,
+        F: FnMut(DiffRow) -> Result<(), E>,
     {
         let name = &self.name;
         let mut statement = self
             .db
             .conn
-            .prepare(&fmt_sql!(
-                "
-            SELECT type, info
-            FROM {name}.diff
-            "
-            ))
+            .prepare(&fmt_sql!("SELECT type, before, after FROM {name}.diff"))
             .context(SqliteFailed)?;
 
         let mut rows = statement.query(params![]).context(SqliteFailed)?;
@@ -467,13 +519,28 @@ impl<'a> Diff<'a> {
                 Some(x) => x,
                 None => break,
             };
-            let kind = row.get(0).context(SqliteFailed)?;
+            let kind: u8 = row.get(0).context(SqliteFailed)?;
+            let before: Option<u64> = row.get(1).context(SqliteFailed)?;
+            let after: Option<u64> = row.get(2).context(SqliteFailed)?;
+
             let kind = DiffType::parse(kind).context(WrongDiffType { found: kind })?;
+            let before = self.load_info(&self.before_snap, before)?;
+            let after = self.load_info(&self.after_snap, after)?;
 
-            let info: String = row.get(1).context(SqliteFailed)?;
-            let info = serde_json::from_str(&info).context(JsonFailed)?;
+            let row = match kind {
+                DiffType::Deleted => DiffRow::Deleted {
+                    before: before.context(InvalidDiffRow)?,
+                },
+                DiffType::Created => DiffRow::Created {
+                    after: after.context(InvalidDiffRow)?,
+                },
+                DiffType::Changed => DiffRow::Changed {
+                    before: before.context(InvalidDiffRow)?,
+                    after: after.context(InvalidDiffRow)?,
+                },
+            };
 
-            match func(kind, info) {
+            match func(row) {
                 Ok(_) => {}
                 res @ Err(_) => return Ok(res),
             }
@@ -484,10 +551,18 @@ impl<'a> Diff<'a> {
 
     pub fn of_kind<F, E>(&'a self, kind: DiffType, mut func: F) -> Result<Result<(), E>, Error>
     where
-        F: FnMut(Info<External>) -> Result<(), E>,
+        F: FnMut(DiffRow) -> Result<(), E>,
     {
         // It's way easier to filter inside of Rust instead of passing `WHERE type = {kind}` to sqlite.
-        self.for_each(|k, i| if k == kind { func(i) } else { Ok(()) })
+        // But in future it would be easy to switch to sqlite.
+        // At this moment it's very inefficient since it deserializes all infos, including ignored ones.
+        self.for_each(|row| {
+            if row.kind() == kind {
+                func(row)
+            } else {
+                Ok(())
+            }
+        })
     }
 }
 
