@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::fileinfo::Info;
+use crate::maybemut::*;
 use crate::path::EncodedPath;
 use crate::path::External;
 
@@ -133,7 +134,8 @@ impl Database {
             "CREATE TABLE IF NOT EXISTS snapshots (
                 name TEXT NOT NULL,
                 created_at DATETIME NOT NULL,
-                filled_at DATETIME
+                filled_at DATETIME,
+                uploaded BOOLEAN
             )",
             params![],
         )
@@ -148,7 +150,7 @@ impl Database {
         })
     }
 
-    pub fn readonly_snapshot(&self, name: SqlName) -> Result<Snapshot, Error> {
+    pub fn readonly_snapshot<'a>(&'a self, name: SqlName) -> Result<Snapshot<'a, RO>, Error> {
         self.conn
             .execute(&self.attach(&name)?, params![])
             .context(SqliteFailed)?;
@@ -156,7 +158,7 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
-    pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot, Error> {
+    pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot<RW>, Error> {
         // Attach database:
         self.conn
             .execute(&self.attach(&name)?, params![])
@@ -190,7 +192,7 @@ impl Database {
             ))
             .context(SqliteFailed)?;
             txn.execute(
-                "INSERT INTO snapshots(name, created_at) VALUES (:name, :created_at)",
+                "INSERT INTO snapshots(name, created_at, filled) VALUES (:name, :created_at, 0)",
                 named_params![
                     ":name": name.0,
                     ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
@@ -203,15 +205,15 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
-    pub fn compare_snapshots<'a>(
+    pub fn compare_snapshots<'a, R1: SnapKind<'a>, R2: SnapKind<'a>>(
         &'a self,
-        before: &Snapshot<'a>,
-        after: &Snapshot<'a>,
+        before: &Snapshot<'a, R1>,
+        after: &Snapshot<'a, R2>,
     ) -> Result<Diff<'a>, Error> {
         {
             let this = self as *const Self as usize;
-            let before = before.db as *const Self as usize;
-            let after = after.db as *const Self as usize;
+            let before = std::borrow::Borrow::borrow(&before.db) as *const Self as usize;
+            let after = std::borrow::Borrow::borrow(&after.db) as *const Self as usize;
             snafu::ensure!(
                 this == before && before == after,
                 DatabasesMixed {
@@ -233,13 +235,50 @@ impl Database {
     }
 }
 
-pub struct Snapshot<'a> {
-    db: &'a Database,
+pub trait SnapKind<'a> = MaybeMut<'a, Database>;
+
+pub struct Snapshot<'a, R: SnapKind<'a>> {
+    db: R::Reference,
     name: SqlName,
 }
 
-impl Snapshot<'_> {
-    pub fn fill(&self, root: &Path) -> Result<(), Error> {
+pub struct SnapshotFiller<'a> {
+    snap_name: &'a SqlName,
+    transaction: rusqlite::Transaction<'a>,
+    sql: String,
+}
+
+impl<'a> SnapshotFiller<'a> {
+    pub fn new(snapshot: &'a mut Snapshot<'a, RW>) -> Result<Self, Error> {
+        let txn = snapshot.db.conn.transaction().context(SqliteFailed)?;
+        let sql = fmt_sql!(
+            "INSERT INTO {0}.snap(path, identifier, info)
+            VALUES(:path, :identifier, :info)",
+            snapshot.name
+        );
+        txn.prepare_cached(&sql).context(SqliteFailed)?;
+        Ok(SnapshotFiller {
+            snap_name: &snapshot.name,
+            transaction: txn,
+            sql,
+        })
+    }
+
+    fn get_statement(&self) -> Result<rusqlite::CachedStatement, Error> {
+        self.transaction
+            .prepare_cached(&self.sql)
+            .context(SqliteFailed)
+    }
+}
+
+impl Drop for SnapshotFiller<'_> {
+    fn drop(&mut self) {
+        // FIXME: Why do I need SnapshotFiller?
+    }
+}
+
+impl<'a> Snapshot<'a, RW> {
+    pub fn fill(&mut self, root: &Path) -> Result<(), Error> {
         let walk = walkdir::WalkDir::new(root).into_iter();
         log!(time: "Walking over {}", root = root.to_string_lossy());
         let txn = self.db.conn.unchecked_transaction().context(SqliteFailed)?;
@@ -276,16 +315,19 @@ impl Snapshot<'_> {
         log!(time: "Done walking ({})", root = root.to_string_lossy());
         Ok(())
     }
+}
 
+impl<'a, T: SnapKind<'a>> Snapshot<'a, T> {
     pub fn name(&self) -> &SqlName {
         &self.name
     }
 }
 
-impl Drop for Snapshot<'_> {
+impl<'a, R: SnapKind<'a>> Drop for Snapshot<'a, R> {
     fn drop(&mut self) {
-        let _ = self
-            .db
+        use std::borrow::Borrow;
+        let db: &Database = Borrow::borrow(&self.db);
+        let _ = db
             .conn
             .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
     }
@@ -336,7 +378,11 @@ impl<'a> Diff<'a> {
         Ok(Diff { db, name })
     }
 
-    pub fn fill(&self, before: &Snapshot<'a>, after: &Snapshot<'a>) -> Result<(), Error> {
+    pub fn fill<R1: SnapKind<'a>, R2: SnapKind<'a>>(
+        &self,
+        before: &Snapshot<'a, R1>,
+        after: &Snapshot<'a, R2>,
+    ) -> Result<(), Error> {
         let b = &before.name;
         let a = &after.name;
 

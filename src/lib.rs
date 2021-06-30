@@ -1,5 +1,6 @@
 #![feature(
     min_type_alias_impl_trait,
+    trait_alias,
     type_ascription,
     never_type,
     exhaustive_patterns,
@@ -18,6 +19,8 @@ pub use time::OffsetDateTime as DateTime;
 
 #[macro_use]
 pub mod logging;
+
+mod maybemut;
 
 pub mod backup;
 pub mod cpio;
@@ -88,7 +91,7 @@ pub async fn create_snapshot(db: PathBuf, root: PathBuf) -> CommandResult {
     use backup::database::*;
     let mut db = Database::open(db)?;
     let name = SqlName::now();
-    let snap = db.open_snapshot(name)?;
+    let mut snap = db.open_snapshot(name)?;
     let () = snap.fill(&root)?;
     println!("{}", snap.name());
     Ok(())
@@ -101,7 +104,6 @@ pub async fn diff_snapshot(db: PathBuf, before: String, after: String) -> Comman
 
     let before = db.readonly_snapshot(SqlName::new(before)?)?;
     let after = db.readonly_snapshot(SqlName::new(after)?)?;
-
     let diff = db.compare_snapshots(&before, &after)?;
     let _ = diff.for_each::<_, !>(|kind, info| {
         println!("{:?}: {}", kind, info.path.escaped());
