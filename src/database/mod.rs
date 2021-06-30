@@ -77,5 +77,5 @@ fn generate_id(table_id: u64, row_id: u64) -> Result<u64, Error> {
     // So it should be enough for any practical use.
     ensure!(table_id < (1 << 23), TooManySnapshots);
     ensure!(row_id < (1 << 40), TooManyRows);
-    Ok((table_id << 23) | row_id)
+    Ok((table_id << 40) | row_id)
 }
