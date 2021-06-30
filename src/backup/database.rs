@@ -1,7 +1,7 @@
+use std::borrow::Borrow;
 use std::path::{Path, PathBuf};
 
 use crate::fileinfo::Info;
-use crate::maybemut::*;
 use crate::path::EncodedPath;
 use crate::path::External;
 
@@ -150,7 +150,7 @@ impl Database {
         })
     }
 
-    pub fn readonly_snapshot<'a>(&'a self, name: SqlName) -> Result<Snapshot<'a, RO>, Error> {
+    pub fn readonly_snapshot<'a>(&'a self, name: SqlName) -> Result<Snapshot<&'a Database>, Error> {
         self.conn
             .execute(&self.attach(&name)?, params![])
             .context(SqliteFailed)?;
@@ -158,7 +158,7 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
-    pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot<RW>, Error> {
+    pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot<&mut Database>, Error> {
         // Attach database:
         self.conn
             .execute(&self.attach(&name)?, params![])
@@ -205,10 +205,10 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
-    pub fn compare_snapshots<'a, R1: SnapKind<'a>, R2: SnapKind<'a>>(
+    pub fn compare_snapshots<'a, D1: Borrow<Database>, D2: Borrow<Database>>(
         &'a self,
-        before: &Snapshot<'a, R1>,
-        after: &Snapshot<'a, R2>,
+        before: &Snapshot<D1>,
+        after: &Snapshot<D2>,
     ) -> Result<Diff<'a>, Error> {
         {
             let this = self as *const Self as usize;
@@ -235,10 +235,8 @@ impl Database {
     }
 }
 
-pub trait SnapKind<'a> = MaybeMut<'a, Database>;
-
-pub struct Snapshot<'a, R: SnapKind<'a>> {
-    db: R::Reference,
+pub struct Snapshot<D: Borrow<Database>> {
+    db: D,
     name: SqlName,
 }
 
@@ -249,7 +247,7 @@ pub struct SnapshotFiller<'a> {
 }
 
 impl<'a> SnapshotFiller<'a> {
-    pub fn new(snapshot: &'a mut Snapshot<'a, RW>) -> Result<Self, Error> {
+    pub fn new(snapshot: &'a mut Snapshot<&'a mut Database>) -> Result<Self, Error> {
         let txn = snapshot.db.conn.transaction().context(SqliteFailed)?;
         let sql = fmt_sql!(
             "INSERT INTO {0}.snap(path, identifier, info)
@@ -277,7 +275,7 @@ impl Drop for SnapshotFiller<'_> {
     }
 }
 
-impl<'a> Snapshot<'a, RW> {
+impl<'a> Snapshot<&'a mut Database> {
     pub fn fill(&mut self, root: &Path) -> Result<(), Error> {
         let walk = walkdir::WalkDir::new(root).into_iter();
         log!(time: "Walking over {}", root = root.to_string_lossy());
@@ -317,19 +315,16 @@ impl<'a> Snapshot<'a, RW> {
     }
 }
 
-impl<'a, T: SnapKind<'a>> Snapshot<'a, T> {
+impl<'a, D: Borrow<Database>> Snapshot<D> {
     pub fn name(&self) -> &SqlName {
         &self.name
     }
 }
 
-impl<'a, R: SnapKind<'a>> Drop for Snapshot<'a, R> {
+impl<'a, D: Borrow<Database>> Drop for Snapshot<D> {
     fn drop(&mut self) {
-        use std::borrow::Borrow;
-        let db: &Database = Borrow::borrow(&self.db);
-        let _ = db
-            .conn
-            .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
+        let db: &Database = self.db.borrow();
+        let _ = db.conn.execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
     }
 }
 
@@ -378,10 +373,10 @@ impl<'a> Diff<'a> {
         Ok(Diff { db, name })
     }
 
-    pub fn fill<R1: SnapKind<'a>, R2: SnapKind<'a>>(
+    pub fn fill<D1: Borrow<Database>, D2: Borrow<Database>>(
         &self,
-        before: &Snapshot<'a, R1>,
-        after: &Snapshot<'a, R2>,
+        before: &Snapshot<D1>,
+        after: &Snapshot<D2>,
     ) -> Result<(), Error> {
         let b = &before.name;
         let a = &after.name;

@@ -20,8 +20,6 @@ pub use time::OffsetDateTime as DateTime;
 #[macro_use]
 pub mod logging;
 
-mod maybemut;
-
 pub mod backup;
 pub mod cpio;
 pub mod fileext;
