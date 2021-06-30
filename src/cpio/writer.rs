@@ -92,7 +92,6 @@ struct StateContainer<'a> {
 }
 
 mod states {
-    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     pub struct None<'a> {

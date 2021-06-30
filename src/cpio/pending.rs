@@ -109,7 +109,6 @@ pub enum Mismatch {
 }
 
 mod states {
-    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     pub struct File<'a> {

@@ -26,7 +26,9 @@
     // For me, it's better to make as many arms, as many variants in enum.
     clippy::match_same_arms,
     // Again, I do not think that this lint is needed.
-    clippy::module_name_repetitions
+    clippy::module_name_repetitions,
+    // This lint is useful, but too annoying
+    clippy::wildcard_imports,
 )]
 
 use snafu::Snafu;
@@ -36,7 +38,7 @@ pub use time::OffsetDateTime as DateTime;
 #[macro_use]
 pub mod logging;
 
-pub mod backup;
+pub mod database;
 pub mod cpio;
 pub mod fileext;
 pub mod fileinfo;
@@ -55,10 +57,10 @@ pub enum TopError {
     #[snafu(context(false))]
     CpioReadError { source: cpio::reader::ReadError },
     #[snafu(context(false))]
-    DbOpenError { source: backup::database::Error },
+    DbOpenError { source: database::Error },
     #[snafu(context(false))]
     InvalidSnapshotName {
-        source: backup::database::NotAValidSqlName,
+        source: database::NotAValidSqlName,
     },
 }
 
@@ -102,7 +104,7 @@ pub async fn extract_cpio(src: PathBuf, _dst: PathBuf) -> CommandResult {
 }
 
 pub fn create_snapshot(db: PathBuf, root: &Path) -> CommandResult {
-    use backup::database::{Database, SqlName};
+    use database::{Database, SqlName};
     let mut db = Database::open(db)?;
     let name = SqlName::now();
     let mut snap = db.open_snapshot(name)?;
@@ -112,7 +114,7 @@ pub fn create_snapshot(db: PathBuf, root: &Path) -> CommandResult {
 }
 
 pub fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResult {
-    use backup::database::{Database, SqlName};
+    use database::{Database, SqlName};
     let db = Database::open(db)?;
 
     let before = db.readonly_snapshot(SqlName::new(before)?)?;
