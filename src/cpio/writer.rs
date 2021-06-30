@@ -1,7 +1,7 @@
 use super::pending::{OpeningReadFuture, Pending, PendingReader};
 use super::smart_read::SmartReadExt;
 use super::smart_read::SmartWrap;
-use super::state_machine::*;
+use super::state_machine::{AdvanceResult, Advanceable};
 use crate::cpio::smart_read::{SmartBuf, SmartRead};
 use crate::cpio::Archive;
 use either::Either;
@@ -34,7 +34,7 @@ impl Reader<'_> {
         Reader {
             inner: State::None(states::None {
                 archive: archive as *mut _,
-                phantom: Default::default(),
+                phantom: std::marker::PhantomData::default(),
                 position: 0,
             })
             .wrap(),
@@ -92,6 +92,7 @@ struct StateContainer<'a> {
 }
 
 mod states {
+    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     pub struct None<'a> {

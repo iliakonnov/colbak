@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use tokio::fs::File;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(bound(serialize="Kind: Serialize", deserialize="Kind: Deserialize<'de>"))]
 pub struct Info<P: PathKind, Kind = UnspecifiedInfo> {
     pub path: EncodedPath<P>,
     pub inode: u64,
@@ -54,13 +55,15 @@ pub struct FileIdentifier {
 }
 
 impl FileIdentifier {
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
-        let ptr = self as *const _ as *const _;
+        let ptr = (self as *const Self).cast::<u8>();
         unsafe { std::slice::from_raw_parts(ptr, std::mem::size_of::<Self>()) }
     }
 }
 
 impl<K: PathKind> Info<K, UnspecifiedInfo> {
+    #[must_use]
     pub fn identifier(&self) -> Option<FileIdentifier> {
         match &self.data {
             UnspecifiedInfo::File(f) => Some(FileIdentifier {
@@ -76,6 +79,7 @@ impl<K: PathKind> Info<K, UnspecifiedInfo> {
 }
 
 impl<K: PathKind> Info<K, FileInfo> {
+    #[must_use]
     pub fn identifier(&self) -> FileIdentifier {
         FileIdentifier {
             inode: self.inode,
@@ -87,6 +91,7 @@ impl<K: PathKind> Info<K, FileInfo> {
 }
 
 impl<P: PathKind> Info<P, UnspecifiedInfo> {
+    #[must_use]
     pub fn size(&self) -> Option<u64> {
         match &self.data {
             UnspecifiedInfo::File(file) => Some(file.size),
@@ -95,7 +100,10 @@ impl<P: PathKind> Info<P, UnspecifiedInfo> {
         }
     }
 
+    #[allow(clippy::missing_panics_doc)]
+    #[must_use]
     pub fn turn(self) -> InfoKind<P> {
+        // PANIC: This function does not panic, since it always converting to correct variant
         match &self.data {
             UnspecifiedInfo::File(_) => InfoKind::File(self.into_file().unwrap()),
             UnspecifiedInfo::Dir(_) => InfoKind::Dir(self.into_dir().unwrap()),
@@ -142,6 +150,7 @@ conversion!(using Dir (into_dir) from DirInfo);
 conversion!(using File (into_file) from FileInfo);
 conversion!(using Unknown (into_unknown) from UnknownInfo);
 
+#[allow(clippy::needless_pass_by_value)] // False-positive
 fn systime_to_datetime(x: Result<SystemTime, std::io::Error>) -> DateTime {
     match x {
         Ok(x) => DateTime::from(x),
@@ -167,17 +176,18 @@ impl Info<Local> {
         let metadata = file.metadata().await?;
 
         let path = EncodedPath::from_path(local_path);
-        Ok(Info::with_metadata(path, metadata))
+        Ok(Info::with_metadata(path, &metadata))
     }
 
-    pub fn with_metadata(path: EncodedPath<Local>, metadata: Metadata) -> Self {
+    #[must_use]
+    pub fn with_metadata(path: EncodedPath<Local>, metadata: &Metadata) -> Self {
         Self {
             path,
             inode: metadata.inode(),
             mode: metadata.mode(),
             ctime: systime_to_datetime(metadata.created()),
             mtime: systime_to_datetime(metadata.modified()),
-            data: extract_kind(&metadata),
+            data: extract_kind(metadata),
             hash: None,
         }
     }

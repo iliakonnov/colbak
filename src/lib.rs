@@ -11,10 +11,26 @@
     backtrace
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
-#![allow(dead_code)]
+#![allow(dead_code, unused_macros)]
+#![warn(clippy::pedantic)]
+#![deny(
+    // This project should never panic.
+    // This single lint is much simpler to deny than unwrap_used, expect_used and few others.
+    clippy::missing_panics_doc
+)]
+#![allow(
+    // I will write docs later:
+    clippy::missing_errors_doc,
+    // I know better, what is readable. This project does not have any long literals really.
+    clippy::unreadable_literal,
+    // For me, it's better to make as many arms, as many variants in enum.
+    clippy::match_same_arms,
+    // Again, I do not think that this lint is needed.
+    clippy::module_name_repetitions
+)]
 
 use snafu::Snafu;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 pub use time::OffsetDateTime as DateTime;
 
 #[macro_use]
@@ -46,7 +62,7 @@ pub enum TopError {
     },
 }
 
-pub async fn create_cpio(dest: PathBuf, files: Vec<PathBuf>) -> CommandResult {
+pub async fn create_cpio(dst: PathBuf, files: Vec<PathBuf>) -> CommandResult {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut archive = cpio::Archive::new();
     for f in files {
@@ -54,7 +70,7 @@ pub async fn create_cpio(dest: PathBuf, files: Vec<PathBuf>) -> CommandResult {
         archive.add(info);
     }
     let mut src = archive.read();
-    let mut dst = tokio::fs::File::create(dest).await?;
+    let mut dst = tokio::fs::File::create(dst).await?;
     let mut buf = vec![0; 1024];
     loop {
         let len = src.read(&mut buf).await?;
@@ -85,18 +101,18 @@ pub async fn extract_cpio(src: PathBuf, _dst: PathBuf) -> CommandResult {
     Ok(())
 }
 
-pub async fn create_snapshot(db: PathBuf, root: PathBuf) -> CommandResult {
-    use backup::database::*;
+pub fn create_snapshot(db: PathBuf, root: &Path) -> CommandResult {
+    use backup::database::{Database, SqlName};
     let mut db = Database::open(db)?;
     let name = SqlName::now();
     let mut snap = db.open_snapshot(name)?;
-    snap.filler()?.fill(&root)?.save()?;
+    snap.filler()?.fill(root)?.save()?;
     println!("{}", snap.name());
     Ok(())
 }
 
-pub async fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResult {
-    use backup::database::*;
+pub fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResult {
+    use backup::database::{Database, SqlName};
     use path::EscapedString;
     let db = Database::open(db)?;
 

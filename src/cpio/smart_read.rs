@@ -160,10 +160,9 @@ where
                     if buf.is_eof {
                         // So it should explicitly mark that there is no more data.
                         return Poll::Ready(Ok(()));
-                    } else {
-                        // Otherwise we will try reading again.
-                        continue;
                     }
+                    // Otherwise we will try reading again.
+                    continue;
                 }
             }
         }
@@ -194,13 +193,8 @@ impl<T: AsyncRead> AsyncRead for Energetic<T> {
         let mut inner = self.project().inner;
         while previous != 0 {
             match inner.as_mut().poll_read(cx, read_buf) {
-                Poll::Pending => {
-                    if is_pending {
-                        return Poll::Pending;
-                    } else {
-                        return Poll::Ready(Ok(()));
-                    }
-                }
+                Poll::Pending if is_pending => return Poll::Pending,
+                Poll::Pending => return Poll::Ready(Ok(())),
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Ready(Ok(())) => {
                     let new = read_buf.remaining();
@@ -257,13 +251,13 @@ impl<R, D: digest::Digest> SaveAndHash<R, D> {
         &self.hash
     }
 
-    pub fn repeat<'a>(&'a self) -> impl AsyncRead + 'a {
-        use tokio_util::compat::*;
+    pub fn repeat(&self) -> impl AsyncRead + '_ {
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
         futures::io::Cursor::new(&self.buffer[..]).compat()
     }
 
     pub fn repeat_cloned(&self) -> impl AsyncRead + 'static {
-        use tokio_util::compat::*;
+        use tokio_util::compat::FuturesAsyncReadCompatExt;
         futures::io::Cursor::new(self.buffer.clone()).compat()
     }
 }

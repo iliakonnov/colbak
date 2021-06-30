@@ -38,8 +38,8 @@ async fn entry_point(opt: Opt) -> Result<(), TopError> {
             archive,
             destination,
         } => extract_cpio(archive, destination).await,
-        Opt::Snapshot { db, root } => create_snapshot(db, root).await,
-        Opt::Compare { db, before, after } => diff_snapshot(db, before, after).await,
+        Opt::Snapshot { db, root } => create_snapshot(db, &root),
+        Opt::Compare { db, before, after } => diff_snapshot(db, before, after),
     }
 }
 

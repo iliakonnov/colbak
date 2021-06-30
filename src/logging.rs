@@ -1,3 +1,6 @@
+// FIXME: It's better to make logging non-panicking too
+#![allow(clippy::missing_panics_doc)]
+
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -30,11 +33,13 @@ pub fn get_log(
     name: &'static str,
 ) -> &'static Mutex<Logging> {
     source.get_or_init(|| {
+        // FIXME: Panicking here.
+        // This could be fixed later, since currently it fails very soon.
         let file = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .append(true)
-            .open(PathBuf::from("logs/").join(name).with_extension("·json"))
+            .open(PathBuf::from("logs/").join(name).with_extension("json"))
             .unwrap();
         Mutex::new(Logging {
             json: BufWriter::new(file),
@@ -88,13 +93,13 @@ macro_rules! log {
             fn type_name_of<T>(_: T) -> &'static str {
                 std::any::type_name::<T>()
             }
-            let name = type_name_of(f);
+            let func = type_name_of(f);
             // `3` is the length of the `::f`.
-            let name = &name[..name.len() - 3];
+            let func = &func[..func.len() - 3];
 
             let s = $crate::logging::LogEntry {
                 message: $fmt,
-                func: name,
+                func,
                 file: file!(),
                 position: (line!(), column!()),
                 time: ::time::OffsetDateTime::now_utc(),

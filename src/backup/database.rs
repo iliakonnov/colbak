@@ -1,7 +1,7 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::path::{Path, PathBuf};
 
-use crate::fileinfo::Info;
+use crate::fileinfo::{FileIdentifier, Info};
 use crate::path::EncodedPath;
 use crate::path::External;
 
@@ -72,11 +72,15 @@ impl SqlName {
         }
     }
 
+    #[allow(clippy::missing_panics_doc)]
+    #[must_use]
     pub fn now() -> SqlName {
         let name = time::OffsetDateTime::now_utc().format("at%Y_%m_%d_%H_%M_%S_%N");
+        // PANIC: name is completely correct, so it's safe to unwrap here.
         SqlName::new(name).unwrap()
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -150,7 +154,7 @@ impl Database {
         })
     }
 
-    pub fn readonly_snapshot<'a>(&'a self, name: SqlName) -> Result<Snapshot<&'a Database>, Error> {
+    pub fn readonly_snapshot(&self, name: SqlName) -> Result<Snapshot<&Database>, Error> {
         self.conn
             .execute(&self.attach(&name)?, params![])
             .context(SqliteFailed)?;
@@ -272,10 +276,10 @@ impl<'a> SnapshotFiller<'a> {
     pub fn add(&self, entry: walkdir::DirEntry) -> Result<(), Error> {
         let metadata = entry.metadata().context(CantWalkdir)?;
         let path = EncodedPath::from_path(entry.into_path());
-        let info = Info::with_metadata(path, metadata);
+        let info = Info::with_metadata(path, &metadata);
         self.get_statement()?.execute(named_params![
             ":path": info.path.as_bytes(),
-            ":identifier": info.identifier().as_ref().map(|i| i.as_bytes()).unwrap_or_default(),
+            ":identifier": info.identifier().as_ref().map(FileIdentifier::as_bytes).unwrap_or_default(),
             ":info": serde_json::to_string(&info).context(JsonFailed)?,
         ])
         .context(SqliteFailed)?;
@@ -322,7 +326,7 @@ impl<'a, D: Borrow<Database>> Snapshot<D> {
 impl<'a, D: Borrow<Database>> Drop for Snapshot<D> {
     fn drop(&mut self) {
         let db: &Database = self.db.borrow();
-        let _ = db
+        let _unused_result = db
             .conn
             .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
     }
@@ -333,7 +337,7 @@ pub struct Diff<'a> {
     name: SqlName,
 }
 
-#[derive(Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
 #[repr(u8)]
 pub enum DiffType {
     Deleted = 0,
@@ -489,7 +493,7 @@ impl<'a> Diff<'a> {
 
 impl Drop for Diff<'_> {
     fn drop(&mut self) {
-        let _ = self
+        let _unused_result = self
             .db
             .conn
             .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);

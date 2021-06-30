@@ -14,8 +14,6 @@ use std::task::{Context, Poll};
 use tokio::fs::File;
 use tokio::io::AsyncRead;
 
-enum State {}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pending {
     pub info: Info<Local>,
@@ -111,6 +109,7 @@ pub enum Mismatch {
 }
 
 mod states {
+    #[allow(clippy::wildcard_imports)]
     use super::*;
 
     pub struct File<'a> {

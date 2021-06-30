@@ -2,6 +2,7 @@ use crate::serde_b64;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::hash::{Hash, Hasher};
+use std::marker::PhantomData;
 use std::path::PathBuf;
 
 fn u64_to_ascii(num: u64) -> [u8; 12] {
@@ -19,14 +20,20 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
         .chain(upper)
         .rev()
         .collect::<Vec<u8>>();
-    assert!(alphabet.len() >= 41);
+    let alphabet_len = alphabet.len() as u64;
+    assert!(alphabet_len >= 41);
     let mut result = [alphabet[0]; 12];
     let mut idx = 0;
-    let mut num = num as usize;
+    let mut num = num;
     while num != 0 {
-        let rem = num % alphabet.len();
-        let div = num / alphabet.len();
+        let rem = num % alphabet_len;
+        let div = num / alphabet_len;
         debug_assert!(idx < 12);
+
+        // Remainder can't be a big number.
+        #[allow(clippy::cast_possible_truncation)]
+        let rem = rem as usize;
+
         result[idx] = alphabet[rem];
         num = div;
         idx += 1;
@@ -45,22 +52,23 @@ pub struct EncodedPath<K: PathKind>(
     #[serde(skip, default)] std::marker::PhantomData<K>,
 );
 
-pub trait PathKind: std::fmt::Debug + Clone + PartialEq + Serialize + Eq + Sized {}
+pub trait PathKind: std::fmt::Debug + Clone + PartialEq + Eq + Sized {}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
-pub enum Local {}
-
+#[allow(unreachable_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Local(!);
 impl PathKind for Local {}
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
-pub enum External {}
-
+#[allow(unreachable_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct External(!);
 impl PathKind for External {}
 
 // We do not support exotic platforms.
 static_assertions::const_assert!(std::path::MAIN_SEPARATOR.is_ascii());
 
 impl EncodedPath<Local> {
+    #[must_use]
     pub fn from_path(path: PathBuf) -> Self {
         let os = path.into_os_string();
         let vec = os_str_bytes::OsStringBytes::into_raw_vec(os);
@@ -79,6 +87,7 @@ impl EncodedPath<Local> {
 }
 
 impl EncodedPath<External> {
+    #[must_use]
     pub fn from_vec(mut vec: Vec<u8>) -> Self {
         let separator = std::path::MAIN_SEPARATOR as u8;
         for i in &mut vec {
@@ -86,19 +95,22 @@ impl EncodedPath<External> {
                 *i = b'/';
             }
         }
-        EncodedPath(vec, Default::default())
+        EncodedPath(vec, PhantomData::default())
     }
 }
 
 impl<K: PathKind> EncodedPath<K> {
+    #[must_use]
     pub(self) fn cast_to<T: PathKind>(self) -> EncodedPath<T> {
-        EncodedPath(self.0, Default::default())
+        EncodedPath(self.0, PhantomData::default())
     }
 
+    #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 
+    #[must_use]
     pub fn split_parent(&self) -> (&[u8], &[u8]) {
         let slash = self
             .0
@@ -112,6 +124,7 @@ impl<K: PathKind> EncodedPath<K> {
         slice.split_at(slash)
     }
 
+    #[must_use]
     pub fn crop_name_to<L: Into<usize>>(&self, max_length: L) -> Cow<[u8]> {
         let max_length = max_length.into();
         if self.0.len() <= max_length {
