@@ -1,4 +1,5 @@
 use std::borrow::Borrow;
+use std::ops::{RangeInclusive};
 
 use rusqlite::params;
 use snafu::{OptionExt, ResultExt};
@@ -7,23 +8,19 @@ use crate::fileinfo::Info;
 use crate::path::External;
 
 use super::error::*;
+use super::index::Database;
 use super::snapshot::Snapshot;
 use super::SqlName;
-use super::index::Database;
 
-pub struct Diff<'a> {
-    db: &'a Database,
-    name: SqlName,
-    before_snap: SqlName,
-    after_snap: SqlName,
-}
-
+// It looks like bitflag, but it is not.
+// Each row in database may have only one of these bits set.
+// Making an bitflag allows to filter rows much more easily and efficient.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
 #[repr(u8)]
 pub enum DiffType {
-    Deleted = 0,
-    Created = 1,
-    Changed = 2,
+    Deleted = 0b001,
+    Created = 0b010,
+    Changed = 0b100,
 }
 
 impl DiffType {
@@ -58,12 +55,23 @@ impl DiffRow {
     }
 }
 
+pub struct Diff<'a> {
+    db: &'a Database,
+    name: SqlName,
+    before_snap: &'a SqlName,
+    after_snap: &'a SqlName,
+}
+
 impl<'a> Diff<'a> {
-    pub fn new(db: &'a Database, before_snap: SqlName, after_snap: SqlName) -> Result<Self, Error> {
-        let name = SqlName::new(format!("diff_{}_vs_{}", &before_snap, &after_snap)).context(
+    pub fn new(
+        db: &'a Database,
+        before_snap: &'a SqlName,
+        after_snap: &'a SqlName,
+    ) -> Result<Self, Error> {
+        let name = SqlName::new(format!("diff_{}_vs_{}", before_snap, after_snap)).context(
             CantBuildDiffName {
-                before: &before_snap,
-                after: &after_snap,
+                before: before_snap,
+                after: after_snap,
             },
         )?;
         {
@@ -157,6 +165,23 @@ impl<'a> Diff<'a> {
         Ok(())
     }
 
+    pub fn query(&'a self) -> DiffQuery<'a> {
+        DiffQuery {
+            diff: self,
+            enabled_kinds: 0b111,
+            allowed_sizes: 0..=u64::MAX
+        }
+    }
+}
+
+#[must_use]
+pub struct DiffQuery<'a> {
+    diff: &'a Diff<'a>,
+    enabled_kinds: u8,
+    allowed_sizes: RangeInclusive<u64>,
+}
+
+impl<'a> DiffQuery<'a> {
     fn load_info(
         &'a self,
         source: &SqlName,
@@ -167,6 +192,7 @@ impl<'a> Diff<'a> {
             None => return Ok(None),
         };
         let json: String = self
+            .diff
             .db
             .conn
             .query_row(
@@ -183,27 +209,33 @@ impl<'a> Diff<'a> {
     where
         F: FnMut(DiffRow) -> Result<(), E>,
     {
-        let name = &self.name;
+        let name = &self.diff.name;
+        let type_filter = self.enabled_kinds;
+        let min_size = self.allowed_sizes.start();
+        let max_size = self.allowed_sizes.end();
         let mut statement = self
+            .diff
             .db
             .conn
-            .prepare(&fmt_sql!("SELECT type, before, after FROM {name}.diff"))
+            .prepare(&fmt_sql!(
+                r#"
+                SELECT type, before, after
+                FROM {name}.diff
+                WHERE (type & {type_filter}) != 0
+                AND {min_size} <= size AND size <= {max_size}
+                "#
+            ))
             .context(SqliteFailed)?;
 
         let mut rows = statement.query(params![]).context(SqliteFailed)?;
-        loop {
-            let row = rows.next().context(SqliteFailed)?;
-            let row = match row {
-                Some(x) => x,
-                None => break,
-            };
+        while let Some(row) = rows.next().context(SqliteFailed)? {
             let kind: u8 = row.get(0).context(SqliteFailed)?;
             let before: Option<u64> = row.get(1).context(SqliteFailed)?;
             let after: Option<u64> = row.get(2).context(SqliteFailed)?;
 
             let kind = DiffType::parse(kind).context(WrongDiffType { found: kind })?;
-            let before = self.load_info(&self.before_snap, before)?;
-            let after = self.load_info(&self.after_snap, after)?;
+            let before = self.load_info(self.diff.before_snap, before)?;
+            let after = self.load_info(self.diff.after_snap, after)?;
 
             let row = match kind {
                 DiffType::Deleted => DiffRow::Deleted {
@@ -227,20 +259,19 @@ impl<'a> Diff<'a> {
         Ok(Ok(()))
     }
 
-    pub fn of_kind<F, E>(&'a self, kind: DiffType, mut func: F) -> Result<Result<(), E>, Error>
-    where
-        F: FnMut(DiffRow) -> Result<(), E>,
-    {
-        // It's way easier to filter inside of Rust instead of passing `WHERE type = {kind}` to sqlite.
-        // But in future it would be easy to switch to sqlite.
-        // At this moment it's very inefficient since it deserializes all infos, including ignored ones.
-        self.for_each(|row| {
-            if row.kind() == kind {
-                func(row)
-            } else {
-                Ok(())
-            }
-        })
+    pub fn deny_kind(mut self, kind: DiffType) -> Self {
+        self.enabled_kinds &= !(kind as u8);
+        self
+    }
+
+    pub fn only_kind(mut self, kind: DiffType) -> Self {
+        self.enabled_kinds = kind as u8;
+        self
+    }
+
+    pub fn with_size(mut self, size: RangeInclusive<u64>) -> Self {
+        self.allowed_sizes = size;
+        self
     }
 }
 

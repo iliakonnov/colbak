@@ -111,8 +111,8 @@ impl Database {
 
     pub fn compare_snapshots<'a, D1: Borrow<Database>, D2: Borrow<Database>>(
         &'a self,
-        before: &Snapshot<D1>,
-        after: &Snapshot<D2>,
+        before: &'a Snapshot<D1>,
+        after: &'a Snapshot<D2>,
     ) -> Result<Diff<'a>, Error> {
         {
             let this = self as *const Self as usize;
@@ -127,7 +127,7 @@ impl Database {
                 }
             );
         }
-        let diff = Diff::new(self, before.name.clone(), after.name.clone())?;
+        let diff = Diff::new(self, &before.name, &after.name)?;
         diff.fill(before, after)?;
         Ok(diff)
     }

@@ -120,7 +120,7 @@ pub fn diff_snapshot(db: PathBuf, before: String, after: String) -> CommandResul
     let before = db.readonly_snapshot(SqlName::new(before)?)?;
     let after = db.readonly_snapshot(SqlName::new(after)?)?;
     let diff = db.compare_snapshots(&before, &after)?;
-    let _ = diff.for_each::<_, !>(|row| {
+    let _ = diff.query().for_each::<_, !>(|row| {
         println!("{:?}", row);
         Ok(())
     })?;
