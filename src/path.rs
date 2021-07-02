@@ -127,13 +127,13 @@ impl<K: PathKind> EncodedPath<K> {
     /// For path `a/b/c/d.txt` should return [`a`, `a/b`, `a/b/c`].
     #[must_use]
     pub fn prefixes(&self) -> Vec<&[u8]> {
-        let mut slash_positions = self
+        let slash_positions = self
             .0
             .iter()
             .enumerate()
             .filter(|(_, x)| **x == b'/')
             .map(|(idx, _)| idx);
-        let mut result = Vec::new();
+        let mut result = vec![&b""[..]];
         for slash in slash_positions {
             result.push(&self.0[0..slash]);
         }
