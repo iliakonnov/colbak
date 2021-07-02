@@ -8,7 +8,8 @@
     try_blocks,
     arbitrary_enum_discriminant,
     format_args_capture,
-    backtrace
+    backtrace,
+    ptr_metadata
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![allow(dead_code, unused_macros)]
@@ -38,10 +39,11 @@ pub use time::OffsetDateTime as DateTime;
 #[macro_use]
 pub mod logging;
 
-pub mod database;
 pub mod cpio;
+pub mod database;
 pub mod fileext;
 pub mod fileinfo;
+pub mod packer;
 pub mod path;
 pub mod serde_b64;
 pub mod types;
@@ -59,9 +61,7 @@ pub enum TopError {
     #[snafu(context(false))]
     DbOpenError { source: database::Error },
     #[snafu(context(false))]
-    InvalidSnapshotName {
-        source: database::NotAValidSqlName,
-    },
+    InvalidSnapshotName { source: database::NotAValidSqlName },
 }
 
 pub async fn create_cpio(dst: PathBuf, files: Vec<PathBuf>) -> CommandResult {
