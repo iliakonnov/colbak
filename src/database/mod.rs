@@ -22,6 +22,11 @@ pub use {
 
 use snafu::{ensure, Snafu};
 
+
+#[derive(Debug, Clone, Copy)]
+#[repr(transparent)]
+pub struct RowId(pub u64);
+
 #[derive(Debug, Snafu)]
 pub struct NotAValidSqlName {
     name: String,

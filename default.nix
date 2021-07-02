@@ -7,5 +7,6 @@ in pkgs.mkShell {
     llvmPackages_12.clang
     pkgconfig
     openssl
+    sqlite
   ];
 }

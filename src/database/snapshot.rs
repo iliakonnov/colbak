@@ -36,8 +36,8 @@ impl<'a> SnapshotFiller<'a> {
             .context(SqliteFailed)?;
         txn.set_drop_behavior(rusqlite::DropBehavior::Rollback);
         let sql = fmt_sql!(
-            "INSERT INTO {0}.snap(path, identifier, info)
-            VALUES(:path, :identifier, :info)",
+            "INSERT INTO {0}.snap(path, identifier, info, size)
+            VALUES(:path, :identifier, :info, :size)",
             snapshot.name
         );
         Ok(SnapshotFiller {
@@ -61,6 +61,7 @@ impl<'a> SnapshotFiller<'a> {
             ":path": info.path.as_bytes(),
             ":identifier": info.identifier().as_ref().map(FileIdentifier::as_bytes).unwrap_or_default(),
             ":info": serde_json::to_string(&info).context(JsonFailed)?,
+            ":size": info.size()
         ])
         .context(SqliteFailed)?;
         Ok(())

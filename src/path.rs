@@ -124,6 +124,22 @@ impl<K: PathKind> EncodedPath<K> {
         slice.split_at(slash)
     }
 
+    /// For path `a/b/c/d.txt` should return [`a`, `a/b`, `a/b/c`].
+    #[must_use]
+    pub fn prefixes(&self) -> Vec<&[u8]> {
+        let mut slash_positions = self
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| **x == b'/')
+            .map(|(idx, _)| idx);
+        let mut result = Vec::new();
+        for slash in slash_positions {
+            result.push(&self.0[0..slash]);
+        }
+        result
+    }
+
     #[must_use]
     pub fn crop_name_to<L: Into<usize>>(&self, max_length: L) -> Cow<[u8]> {
         let max_length = max_length.into();
@@ -197,6 +213,8 @@ impl EscapedString for [u8] {
 mod tests {
     use crate::path::EscapedString;
 
+    use super::EncodedPath;
+
     #[test]
     fn test_escape_good() {
         let ascii = b"Hello world!";
@@ -223,5 +241,14 @@ mod tests {
         let ascii = b"Hello \xF4\xBF\xBF\xBF world!";
         let escaped = ascii.escaped();
         assert_eq!(escaped, "Hello \\xF4\\xBF\\xBF\\xBF world!");
+    }
+
+    #[test]
+    fn test_prefixes() {
+        let path = b"a/b/c/d.txt".to_vec();
+        let path = EncodedPath::from_vec(path);
+        let splitted = path.prefixes();
+        let expected: Vec<&'static [u8]> = vec![b"a", b"a/b", b"a/b/c"];
+        assert_eq!(splitted, expected);
     }
 }
