@@ -1,3 +1,17 @@
+//! One problem with implementing `AsyncRead` trait is that sometimes you need to return more
+//! data than can be fit into provided buffer.
+//!
+//! [`SmartReader`] solves it by creating temporary buffer ([`SmartBuf`](SmartBuf))
+//! that stores all exceeding data internally. On the next reads this data will be returned to
+//! the reader.
+//!
+//! Moreover, it allows inner reader to return zero bytes of data.
+//! In such case [`SmartReader`] will call [`amortized_read`] again until data will be returned.
+//! Thus, EOF must be set explicitly.
+//!
+//! [`SmartReader`]: SmartReader
+//! [`amortized_read`]: SmartRead::amortized_read
+
 use pin_project_lite::pin_project;
 use std::io;
 use std::pin::Pin;
@@ -31,7 +45,10 @@ pub struct SmartBuf<'a, 'b, 'c> {
 }
 
 impl<'a, 'b, 'c> SmartBuf<'a, 'b, 'c> {
-    pub(crate) fn put_slice(&mut self, slice: &[u8]) {
+    /// Writes slice to the buffers.
+    /// When possible, data written to the buffer provided by reader, but when no more space left,
+    /// data is temporary saved to the internal buffer.
+    pub fn put_slice(&mut self, slice: &[u8]) {
         if slice.is_empty() {
             return;
         }
@@ -49,10 +66,12 @@ impl<'a, 'b, 'c> SmartBuf<'a, 'b, 'c> {
         self.is_empty = false;
     }
 
+    /// Marks end of stream.
     pub fn eof(&mut self) {
         self.is_eof = true;
     }
 
+    /// Memory-efficient fills buffer from provided `AsyncRead` instance.
     pub fn fill_using<T: AsyncRead + Unpin>(
         &mut self,
         other: Pin<&mut T>,
@@ -169,7 +188,14 @@ where
     }
 }
 
+// FIXME: Do we really need Energetic? It looks like BufReader::fill_buf already works well.
 pin_project! {
+    /// There is one problem with simple `SmartWrap<T>` — it often return small chunks
+    /// instead of filling the buffer completely. `Energetic<T>` solves this problem by calling inner
+    /// `AsyncRead` many times until reader-provided buffer is completely filled.
+    /// Thus, resulting `AsyncRead` implementation better matches reader expectations.
+    ///
+    /// [`SmartWrap<T>`]: SmartWrap<T>
     pub struct Energetic<T> {
         #[pin]
         inner: T
@@ -208,85 +234,5 @@ impl<T: AsyncRead> AsyncRead for Energetic<T> {
             }
         }
         Poll::Ready(Ok(()))
-    }
-}
-
-pin_project! {
-    pub struct SaveAndHash<R, D> where D: digest::Digest {
-        #[pin]
-        inner: R,
-        hash: Option<digest::Output<D>>,
-        digest: D,
-        buffer: Vec<u8>
-    }
-}
-
-impl<R, D: digest::Digest> SaveAndHash<R, D> {
-    pub fn new(inner: R) -> Self {
-        Self {
-            inner,
-            hash: None,
-            digest: D::new(),
-            buffer: Vec::new(),
-        }
-    }
-
-    pub fn reset<R2>(mut self, inner: R2) -> (SaveAndHash<R2, D>, Option<digest::Output<D>>) {
-        self.digest.reset();
-        self.buffer.clear();
-        let new = SaveAndHash {
-            inner,
-            hash: None,
-            digest: self.digest,
-            buffer: self.buffer,
-        };
-        (new, self.hash)
-    }
-
-    pub fn owned_hash(self) -> Option<digest::Output<D>> {
-        self.hash
-    }
-
-    pub fn hash(&self) -> &Option<digest::Output<D>> {
-        &self.hash
-    }
-
-    pub fn repeat(&self) -> impl AsyncRead + '_ {
-        use tokio_util::compat::FuturesAsyncReadCompatExt;
-        futures::io::Cursor::new(&self.buffer[..]).compat()
-    }
-
-    pub fn repeat_cloned(&self) -> impl AsyncRead + 'static {
-        use tokio_util::compat::FuturesAsyncReadCompatExt;
-        futures::io::Cursor::new(self.buffer.clone()).compat()
-    }
-}
-
-impl<R, D> AsyncRead for SaveAndHash<R, D>
-where
-    R: AsyncRead,
-    D: digest::Digest,
-{
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let mut this = self.project();
-        match this.inner.as_mut().poll_read(cx, buf) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            Poll::Ready(Ok(())) => {
-                let filled = buf.filled();
-                if filled.is_empty() {
-                    // EOF
-                    let hash = this.digest.finalize_reset();
-                    *this.hash = Some(hash);
-                }
-                this.buffer.extend_from_slice(filled);
-                this.digest.update(filled);
-                Poll::Ready(Ok(()))
-            }
-        }
     }
 }

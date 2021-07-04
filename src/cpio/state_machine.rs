@@ -1,3 +1,5 @@
+// FIXME: Write good docs for this small module
+
 use crate::cpio::smart_read::SmartBuf;
 use std::io;
 use std::task::{Context, Poll};

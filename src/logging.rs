@@ -28,6 +28,7 @@ pub mod groups {
     pub static time: OnceCell<Mutex<Logging>> = OnceCell::new();
 }
 
+#[allow(clippy::unwrap_used)]
 pub fn get_log(
     source: &'static OnceCell<Mutex<Logging>>,
     name: &'static str,
@@ -47,6 +48,7 @@ pub fn get_log(
     })
 }
 
+#[allow(clippy::unwrap_used)]
 pub fn write_log(this: &'static Mutex<Logging>, data: &[u8]) {
     let mut this = this.lock().unwrap();
     this.json.write_all(&[b'\n']).unwrap();
@@ -129,22 +131,4 @@ macro_rules! log {
             }
         }
     }}
-}
-
-macro_rules! catch {
-    {
-        $err:pat => log!($($args:tt)*)
-        $($lt:lifetime :)? {$($body:tt)*}
-    } => {{
-        let res = try {
-            $($lt :)? {
-                $($body)*
-            }
-        };
-        match &res {
-            Ok(_) => (),
-            Err($err) => log!($($args)*)
-        };
-        res
-    }};
 }

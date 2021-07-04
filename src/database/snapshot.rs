@@ -11,23 +11,28 @@ use crate::fileinfo::Info;
 use crate::path::EncodedPath;
 
 use super::error::*;
-use super::SqlName;
 use super::index::Database;
+use super::SqlName;
 
+/// Snapshot of filesystem at one moment
+///
+/// Stores the list of files with their metadata.
 pub struct Snapshot<D: Borrow<Database>> {
     pub(super) db: D,
     pub(super) name: SqlName,
 }
 
+/// Simple struct that allows filling snapshot with files.
+/// 
+/// Note that if [`save()`](Self::save) is not called, transaction will be rolled back.
 #[must_use]
 pub struct SnapshotFiller<'a> {
     snap_name: &'a SqlName,
     transaction: rusqlite::Transaction<'a>,
-    sql: String,
 }
 
 impl<'a> SnapshotFiller<'a> {
-    pub fn new<D: BorrowMut<Database>>(snapshot: &'a mut Snapshot<D>) -> Result<Self, Error> {
+    fn new<D: BorrowMut<Database>>(snapshot: &'a mut Snapshot<D>) -> Result<Self, Error> {
         let mut txn = snapshot
             .db
             .borrow_mut()
@@ -35,24 +40,22 @@ impl<'a> SnapshotFiller<'a> {
             .transaction()
             .context(SqliteFailed)?;
         txn.set_drop_behavior(rusqlite::DropBehavior::Rollback);
-        let sql = fmt_sql!(
-            "INSERT INTO {0}.snap(path, identifier, info, size)
-            VALUES(:path, :identifier, :info, :size)",
-            snapshot.name
-        );
         Ok(SnapshotFiller {
             snap_name: &snapshot.name,
             transaction: txn,
-            sql,
         })
     }
 
     fn get_statement(&self) -> Result<rusqlite::CachedStatement, Error> {
-        self.transaction
-            .prepare_cached(&self.sql)
-            .context(SqliteFailed)
+        let sql = fmt_sql!(
+            "INSERT INTO {0}.snap(path, identifier, info, size)
+            VALUES(:path, :identifier, :info, :size)",
+            &self.snap_name
+        );
+        self.transaction.prepare_cached(&sql).context(SqliteFailed)
     }
 
+    /// Adds new entry to snapshot directly from [`walkdir::DirEntry`](walkdir::DirEntry).
     pub fn add(&self, entry: walkdir::DirEntry) -> Result<(), Error> {
         let metadata = entry.metadata().context(CantWalkdir)?;
         let path = EncodedPath::from_path(entry.into_path());
@@ -67,6 +70,7 @@ impl<'a> SnapshotFiller<'a> {
         Ok(())
     }
 
+    /// Must be called after snapshot is filled.
     pub fn save(self) -> Result<(), Error> {
         self.transaction
             .execute(
@@ -81,6 +85,7 @@ impl<'a> SnapshotFiller<'a> {
         Ok(())
     }
 
+    /// Walk given directory, putting each file into snapshot.
     pub fn fill(self, root: &Path) -> Result<Self, Error> {
         log!(time: "Walking over {}", root = root.to_string_lossy());
         let walk = walkdir::WalkDir::new(root).into_iter();

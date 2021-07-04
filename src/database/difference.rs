@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::ops::RangeInclusive;
 
 use rusqlite::params;
@@ -8,18 +7,28 @@ use crate::fileinfo::Info;
 use crate::path::{EncodedPath, External};
 
 use super::index::Database;
-use super::snapshot::Snapshot;
 use super::SqlName;
 use super::{error::*, RowId};
 
-// It looks like bitflag, but it is not.
-// Each row in database may have only one of these bits set.
-// Making an bitflag allows to filter rows much more easily and efficient.
+/// Type of change that single row is describing.
+///
+/// It looks like bitflag, but it is not.
+/// Each row in database may have only one of these bits set.
+/// Making an bitflag allows to filter rows much more easily and efficient.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
 #[repr(u8)]
 pub enum DiffType {
+    /// File deleted
     Deleted = 0b001,
+    /// New file created.
+    ///
+    /// Modifying content of file will produce two changes: `Deleted` and `Created`
     Created = 0b010,
+    /// Identifier does not changed, but some parts of info did.
+    ///
+    /// That means that contents ([identifier]) of file are the same, only metadata is different.
+    ///
+    /// [identifier]: crate::fileinfo::FileIdentifier
     Changed = 0b100,
 }
 
@@ -64,6 +73,7 @@ impl DiffRow {
     }
 }
 
+/// Difference between two snapshots.
 pub struct Diff<'a> {
     db: &'a Database,
     name: SqlName,
@@ -72,6 +82,7 @@ pub struct Diff<'a> {
 }
 
 impl<'a> Diff<'a> {
+    /// Computes difference between two snapshots, creating database if needed.
     pub fn new(
         db: &'a Database,
         before_snap: &'a SqlName,
@@ -104,21 +115,19 @@ impl<'a> Diff<'a> {
                 )
                 .context(SqliteFailed)?;
         }
-        Ok(Diff {
+        let result = Diff {
             db,
             name,
             before_snap,
             after_snap,
-        })
+        };
+        result.fill()?;
+        Ok(result)
     }
 
-    pub fn fill<D1: Borrow<Database>, D2: Borrow<Database>>(
-        &self,
-        before: &Snapshot<D1>,
-        after: &Snapshot<D2>,
-    ) -> Result<(), Error> {
-        let before = &before.name;
-        let after = &after.name;
+    fn fill(&self) -> Result<(), Error> {
+        let before = self.before_snap;
+        let after = self.after_snap;
 
         let name = &self.name;
         let deleted = DiffType::Deleted as u8;
@@ -177,14 +186,20 @@ impl<'a> Diff<'a> {
     }
 }
 
+/// Small structure that helps making efficient queries to the [`Difference`](Difference).
 #[must_use]
 pub struct DiffQuery<'a> {
     diff: &'a Diff<'a>,
+    /// Bitmask that toggles allowed [types](DiffType) of changes
     enabled_kinds: u8,
+    /// Size of files that will be returned
     allowed_sizes: RangeInclusive<u64>,
 }
 
 impl<'a> DiffQuery<'a> {
+    /// Loads information about the file from snapshot named `name`.
+    /// 
+    /// Returns `None` iff `id` is `None`.
     fn load_info(
         &'a self,
         source: &SqlName,
@@ -208,6 +223,7 @@ impl<'a> DiffQuery<'a> {
         Ok(Some(info))
     }
 
+    /// Selects provided columns with correct filters.
     fn select(&'a self, select: &str) -> Result<rusqlite::Statement, Error> {
         let name = &self.diff.name;
         let type_filter = self.enabled_kinds;
@@ -229,6 +245,7 @@ impl<'a> DiffQuery<'a> {
         Ok(statement)
     }
 
+    /// Returns count of matching rows
     pub fn count(&'a self) -> Result<u64, Error> {
         let mut statement = self.select("COUNT(*)")?;
         statement
@@ -236,6 +253,7 @@ impl<'a> DiffQuery<'a> {
             .context(SqliteFailed)
     }
 
+    /// Applies function to each matching row
     pub fn for_each<F, E>(&'a self, mut func: F) -> Result<Result<(), E>, Error>
     where
         F: FnMut(DiffRow) -> Result<(), E>,

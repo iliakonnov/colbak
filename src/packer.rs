@@ -102,8 +102,9 @@ pub fn pack(diff: &Diff, min_size: u64) -> Result<Packed, crate::database::Error
                     });
                     parent = Some(dir);
                 }
-                // prefixes() always returns empty string first.
-                let parent = parent.unwrap();
+                #[allow(clippy::expect_used)]
+                let parent = parent.expect("prefixes() always returns empty string first.");
+
                 let file = arena.alloc(File {
                     rowid,
                     size,
@@ -161,10 +162,10 @@ pub fn pack(diff: &Diff, min_size: u64) -> Result<Packed, crate::database::Error
     // Finally, we should add bigger files that were skippped earlier.
     let Ok(()) = diff
         .query()
-        .only_kind(DiffType::Changed)
+        .only_kind(DiffType::Created)
         .larger_or_eq(min_size)
         .for_each::<_, !>(|row| {
-            if let DiffRow::Changed { rowid, .. } = row {
+            if let DiffRow::Created { rowid, .. } = row {
                 result.push(smallvec::smallvec![rowid]);
             }
             Ok(())

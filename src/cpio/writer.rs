@@ -13,6 +13,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, ReadBuf};
 
 pin_project! {
+    /// Writer of cpio archive, created by [`Archive`](Archive)
     pub struct Reader<'a> {
         #[pin]
         inner: SmartWrap<State<'a>>
@@ -42,18 +43,27 @@ impl Reader<'_> {
     }
 }
 
-//                                  ↙--↖
-// None -> Header -> OpeningFile -> File -> None again
-//     \-> Trailer -> EOF /
-//                     ↖-/
-
+/// State machine for [`Reader`](Reader)
+/// ```text
+///                                  ↙--↖
+/// None -> Header -> OpeningFile -> File -> None again
+///     \-> Trailer -> EOF-⸜ 
+///                     ↖--/
+/// ```
 enum State<'a> {
+    /// «Neutral» state
     None(states::None<'a>),
+    /// Writing a header for chosen file from archive
     Header(states::Header<'a>),
+    /// Waiting for tokio opening the file
     OpeningFile(states::OpeningFile<'a>),
+    /// File opened, now we are simply reading it
     File(states::File<'a>),
+    /// Writing final trailer
     Trailer(states::Trailer<'a>),
+    /// Reached end of archive, final state
     Eof(states::Eof),
+    /// Something went very wrong, should not be here.
     Poisoned,
 }
 
@@ -87,10 +97,7 @@ impl SmartRead for State<'_> {
     }
 }
 
-struct StateContainer<'a> {
-    state: State<'a>,
-}
-
+/// See [`State`](State) enum
 mod states {
     use super::*;
 

@@ -11,15 +11,16 @@
     backtrace
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
-#![allow(dead_code, unused_macros)]
-#![warn(clippy::pedantic)]
+#![warn(clippy::pedantic, clippy::cargo)]
 #![deny(
     // This project should never panic.
-    // This single lint is much simpler to deny than unwrap_used, expect_used and few others.
-    clippy::missing_panics_doc
+    // Unfortunately, much more simple `missing_panics_doc` works only on public items.
+    clippy::unwrap_used, clippy::expect_used, clippy::panic
 )]
 #![allow(
-    // I will write docs later:
+    // Handled by lints above
+    clippy::missing_panics_doc,
+    // This is not a library, sorry
     clippy::missing_errors_doc,
     // I know better, what is readable. This project does not have any long literals really.
     clippy::unreadable_literal,

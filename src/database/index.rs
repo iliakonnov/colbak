@@ -10,6 +10,7 @@ use super::difference::Diff;
 use super::snapshot::Snapshot;
 use super::{error::*, SqlName};
 
+/// Index of all taken snapshots
 pub struct Database {
     snapshot_count: usize,
     pub(super) conn: rusqlite::Connection,
@@ -17,6 +18,7 @@ pub struct Database {
 }
 
 impl Database {
+    /// Returns SQL string that attaches given database.
     pub(super) fn attach(&self, name: &SqlName) -> Result<String, Error> {
         let mut root = self.root.clone();
         root.push(name.as_str());
@@ -28,6 +30,10 @@ impl Database {
         Ok(fmt_sql!("ATTACH DATABASE '{path}' AS {name}"))
     }
 
+    /// Opens database at given path.
+    ///
+    /// Note that path is a directory, not `.db` file.
+    /// Many auxiliary databases will be stored there too.
     pub fn open<P: AsRef<Path>>(root: P) -> Result<Self, Error> {
         let mut root = root.as_ref().to_owned();
         root.push("db.sqlite3");
@@ -54,6 +60,7 @@ impl Database {
         })
     }
 
+    /// Opens a snapshot for reading only.
     pub fn readonly_snapshot(&self, name: SqlName) -> Result<Snapshot<&Database>, Error> {
         self.conn
             .execute(&self.attach(&name)?, params![])
@@ -62,6 +69,12 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
+    // FIXME: Refactor to return `SnapshotFiller` instead. `Snapshot` should be read only.
+    /// Opens snapshot, creating new database if needed.
+    ///
+    /// If you are not going to write rows here, it is better to use [`readonly_snapshot`] instead.
+    ///
+    /// [`readonly_snapshot`]: Self::readonly_snapshot
     pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot<&mut Database>, Error> {
         // Attach database:
         self.conn
@@ -109,6 +122,9 @@ impl Database {
         Ok(Snapshot { db: self, name })
     }
 
+    /// Computes a difference between two given snapshots. See [Diff] documentation for details.
+    ///
+    /// Returns error if snapshot do not belong to this database (`self == before.db == after.db`).
     pub fn compare_snapshots<'a, D1: Borrow<Database>, D2: Borrow<Database>>(
         &'a self,
         before: &'a Snapshot<D1>,
@@ -127,8 +143,6 @@ impl Database {
                 }
             );
         }
-        let diff = Diff::new(self, &before.name, &after.name)?;
-        diff.fill(before, after)?;
-        Ok(diff)
+        Diff::new(self, &before.name, &after.name)
     }
 }

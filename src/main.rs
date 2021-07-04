@@ -1,13 +1,13 @@
 #![feature(backtrace)]
 
-use awsync_lib::*;
+use colbak_lib::*;
 use std::error::Error as StdError;
 use std::path::PathBuf;
 
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
-#[structopt(name = "awsync")]
+#[structopt(name = "colbak")]
 enum Opt {
     CpioCreate {
         archive: PathBuf,

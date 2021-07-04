@@ -5,6 +5,7 @@ use snafu::{OptionExt, ResultExt, Snafu};
 use std::mem::size_of;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Extractor of cpio archive.
 pub struct Reader<R> {
     reader: R,
 }
@@ -15,6 +16,8 @@ impl<R> Reader<R> {
     }
 }
 
+/// Represents single file being read from archive at this moment.
+/// Can be optionally skipped.
 pub struct ReadFile<R> {
     filename: Vec<u8>,
     reader: R,
@@ -29,6 +32,7 @@ pub struct ReadError {
 }
 
 impl<R: AsyncRead + Unpin> ReadFile<R> {
+    /// Writes contents of file to the provided writer.
     pub async fn drain_to<W>(self, dst: &mut W) -> Result<Reader<R>, ReadError>
     where
         W: AsyncWrite + Unpin,
@@ -53,17 +57,21 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
         Ok(Reader { reader })
     }
 
+    /// Skips this file completely
     pub async fn skip(self) -> Result<Reader<R>, ReadError> {
         let mut sink = tokio::io::sink();
         self.drain_to(&mut sink).await
     }
 
+    /// Extracts info about this file
     pub fn info(&self) -> Info<External> {
+        // We should skip NUL byte in the end.
         let name = &self.filename[..self.filename.len() - 1];
         self.header.info(name)
     }
 }
 
+/// Optional metadata that is stored in the `TRAILER!!!` entry.
 #[derive(Debug, Clone)]
 pub struct UnpackedArchive {
     pub files: Option<Vec<Info<Local>>>,
@@ -80,8 +88,9 @@ pub enum ReadingError {
         source: tokio::io::Error,
         backtrace: snafu::Backtrace,
     },
+    /// Probably header had invalid magic
     InvalidHeader,
-    #[snafu(display("filename does not ends with zero byte"))]
+    /// Filename does not ends with zero byte
     InvalidName,
     CantDeserializeArchive {
         source: serde_json::Error,
@@ -111,11 +120,13 @@ impl<R: AsyncRead + Unpin> Reader<R> {
         }
 
         if header.is_trailer(&filename) {
+            // FIXME: Limit size of json.
             let mut json = Vec::new();
             self.reader.read_to_end(&mut json).await.context(IoFailed)?;
             let files = if json.iter().all(|x| *x == 0) {
                 None
             } else {
+                // FIXME: This error is not critical.
                 Some(serde_json::from_slice(&json).context(CantDeserializeArchive {})?)
             };
             return Ok(NextItem::End(UnpackedArchive { files }));

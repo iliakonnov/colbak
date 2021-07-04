@@ -14,9 +14,11 @@ use std::task::{Context, Poll};
 use tokio::fs::File;
 use tokio::io::AsyncRead;
 
+/// File in archive that is not archived yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Pending {
     pub info: Info<Local>,
+    /// Checksum computed when reading this file. May differ from one in info.
     pub calculated: Option<Checksum>,
 }
 
@@ -26,7 +28,10 @@ pub enum CantOpen {
     InvalidPath { source: os_str_bytes::EncodingError },
 }
 
+/// Result of [`Pending::read`](Pending::read) function.
 pub type PendingReader<'a> = impl AsyncRead + 'a;
+
+/// Future that is returned by [`Pending::read_fut`](Pending::read_fut)
 pub type OpeningReadFuture<'a> =
     impl std::future::Future<Output = Result<PendingReader<'a>, CantOpen>>;
 
@@ -38,6 +43,10 @@ impl Pending {
         }
     }
 
+    /// Opens file for reading and returns it.
+    /// After file is completely read, [`self.calculated`] will be updated
+    ///
+    /// [`self.calculated`]: Self::calculated
     pub async fn read(&mut self) -> Result<impl AsyncRead + '_, CantOpen> {
         let path = self.info.path.to_path().context(InvalidPath)?;
         let file = std::fs::File::open(path).context(IoFailed {})?;
@@ -53,23 +62,31 @@ impl Pending {
         Ok(SmartReader::new(reading))
     }
 
+    /// Same as [`Self::read`](Self::read), but returns named type.
     pub fn read_fut(&mut self) -> OpeningReadFuture<'_> {
         self.read()
     }
 
+    /// Returns [cpio header](CpioHeader) for this file.
     pub fn header(&self) -> Vec<u8> {
         CpioHeader::encode(&self.info)
     }
 }
 
-// ↙--        ↙--↖
-// File --> Done-/
-//      \-> Mismatch -> !
-
+/// State machine:
+/// ```text
+/// ↙--        ↙--↖
+/// File --> Done-/
+///      \-> Mismatch -> !
+/// ```
 pub enum Reading<'a> {
+    /// Should be unreachable.
     Poisoned,
+    /// File is being read.
     File(states::File<'a>),
+    /// Fle successfully was read.
     Done(states::Done<'a>),
+    /// Computed information differs from expected (stored in info).
     Mismatch(Mismatch),
 }
 
@@ -108,6 +125,7 @@ pub enum Mismatch {
     },
 }
 
+/// Stores variants of [`Reading`](Reading) state machine.
 mod states {
     use super::*;
 

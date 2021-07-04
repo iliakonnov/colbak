@@ -5,6 +5,8 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
+/// Converts any u64 number to exactly 12 ascii symbols.
+/// All these symbols can be used in path names on Windows.
 fn u64_to_ascii(num: u64) -> [u8; 12] {
     // To fit into 12 bytes we need at least 41 different chars
     // For 11 bytes we need 57, but that is too much.
@@ -41,10 +43,8 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
     result
 }
 
-const EXTRA_SPACE: usize = 128;
-
-/// Represents path represented using bytes with following requirements:
-/// - `/` symbol is used as separator. Windows nor ntfs-3g does not allow this character, so it is safe to use
+/// Represents path using bytes with following requirements:
+/// - `/` symbol is used as separator. Windows nor ntfs-3g does not allow this character, so it is safe to use.
 /// - `.` symbol is encoded as b"." when possible. It is a plain ASCII symbol, so we should not have any problems.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub struct EncodedPath<K: PathKind>(
@@ -52,6 +52,8 @@ pub struct EncodedPath<K: PathKind>(
     #[serde(skip, default)] std::marker::PhantomData<K>,
 );
 
+/// `PathKind` is used to distinguish paths came from local system (file with such path is very likely to exists)
+/// and from remote sources, such as archive. This does not make many difference, but helps to find possible problems.
 pub trait PathKind: std::fmt::Debug + Clone + PartialEq + Eq + Sized {}
 
 #[allow(unreachable_code)]
@@ -64,7 +66,7 @@ impl PathKind for Local {}
 pub struct External(!);
 impl PathKind for External {}
 
-// We do not support exotic platforms.
+// We do not support exotic platforms, where MAIN_SEPARATOR is not ascii symbol.
 static_assertions::const_assert!(std::path::MAIN_SEPARATOR.is_ascii());
 
 impl EncodedPath<Local> {
@@ -75,6 +77,7 @@ impl EncodedPath<Local> {
         EncodedPath::from_vec(vec).cast_to()
     }
 
+    /// Converts `EncodedPath` into `PathBuf` with correct separators matching current platform.
     pub fn to_path(&self) -> Result<PathBuf, os_str_bytes::EncodingError> {
         let mut vec = self.0.clone();
         for i in &mut vec {
@@ -87,6 +90,7 @@ impl EncodedPath<Local> {
 }
 
 impl EncodedPath<External> {
+    /// Creates `EncodedPath` from vector, normalizing all separators if needed.
     #[must_use]
     pub fn from_vec(mut vec: Vec<u8>) -> Self {
         let separator = std::path::MAIN_SEPARATOR as u8;
@@ -100,6 +104,7 @@ impl EncodedPath<External> {
 }
 
 impl<K: PathKind> EncodedPath<K> {
+    /// Changes kind of this path. Use with caution, explicitly private.
     #[must_use]
     pub(self) fn cast_to<T: PathKind>(self) -> EncodedPath<T> {
         EncodedPath(self.0, PhantomData::default())
@@ -110,6 +115,7 @@ impl<K: PathKind> EncodedPath<K> {
         &self.0
     }
 
+    /// Splits path into filename and directory name.
     #[must_use]
     pub fn split_parent(&self) -> (&[u8], &[u8]) {
         let slash = self
@@ -124,7 +130,14 @@ impl<K: PathKind> EncodedPath<K> {
         slice.split_at(slash)
     }
 
-    /// For path `a/b/c/d.txt` should return [`a`, `a/b`, `a/b/c`].
+    /// ```rust
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = b"a/b/c/d.txt";
+    /// let path = EncodedPath::from_vec(path.to_vec());
+    /// let prefixes = path.prefixes();
+    /// let expected: Vec<&'static [u8]> = vec![b"", b"a", b"a/b", b"a/b/c"];
+    /// assert_eq!(prefixes, expected);
+    /// ```
     #[must_use]
     pub fn prefixes(&self) -> Vec<&[u8]> {
         let slash_positions = self
@@ -140,6 +153,9 @@ impl<K: PathKind> EncodedPath<K> {
         result
     }
 
+    /// Crops path to fit it into `max_length` bytes.
+    /// Tries to preserve extension and most of filename by replacing tail with hash.
+    /// Since resulting string contains hash, it extremely likely won't collide with other cropped path.
     #[must_use]
     pub fn crop_name_to<L: Into<usize>>(&self, max_length: L) -> Cow<[u8]> {
         let max_length = max_length.into();
@@ -171,7 +187,10 @@ impl<K: PathKind> EncodedPath<K> {
     }
 }
 
+/// This trait is implemented for some `[u8]`-like objects that are likely to contain readable string.
 pub trait EscapedString {
+    /// Converts self to the string, replacing any invalid characters with `\x??` sequences.
+    /// Should be used for displaying purposes only.
     fn escaped(&self) -> Cow<str>;
 }
 
@@ -213,8 +232,6 @@ impl EscapedString for [u8] {
 mod tests {
     use crate::path::EscapedString;
 
-    use super::EncodedPath;
-
     #[test]
     fn test_escape_good() {
         let ascii = b"Hello world!";
@@ -241,14 +258,5 @@ mod tests {
         let ascii = b"Hello \xF4\xBF\xBF\xBF world!";
         let escaped = ascii.escaped();
         assert_eq!(escaped, "Hello \\xF4\\xBF\\xBF\\xBF world!");
-    }
-
-    #[test]
-    fn test_prefixes() {
-        let path = b"a/b/c/d.txt".to_vec();
-        let path = EncodedPath::from_vec(path);
-        let splitted = path.prefixes();
-        let expected: Vec<&'static [u8]> = vec![b"a", b"a/b", b"a/b/c"];
-        assert_eq!(splitted, expected);
     }
 }
