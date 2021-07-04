@@ -24,3 +24,27 @@ where
                 .map_err(|err| Error::custom(format!("{:?}", err)))
         })
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    #[test]
+    fn deserialize() {
+        let data = "ABCDEFE=";
+        let expected = [0x00, 0x10, 0x83, 0x10, 0x51];
+        let serialized = serde_json::to_string(data).unwrap();
+        let mut deserializer = serde_json::Deserializer::from_str(&serialized);
+        let result: Vec<u8> = super::deserialize(&mut deserializer).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn serialize() {
+        let data = b"hello";
+        let expected = "\"aGVsbG8=\"";
+        let mut result = Vec::new();
+        let mut serializer = serde_json::Serializer::new(&mut result);
+        super::serialize(data, &mut serializer).unwrap();
+        assert_eq!(result, expected.as_bytes());
+    }
+}

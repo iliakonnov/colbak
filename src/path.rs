@@ -10,10 +10,11 @@ use std::path::PathBuf;
 fn u64_to_ascii(num: u64) -> [u8; 12] {
     // To fit into 12 bytes we need at least 41 different chars
     // For 11 bytes we need 57, but that is too much.
-    let digits = b'0'..b'9'; // 10
-    let upper = b'A'..b'Z'; // 25
-                            // 6 more chars:
+    let digits = b'0'..=b'9'; // 10
+    let upper = b'A'..=b'Z'; // 25
+                             // 6 more chars:
     let additional = [b'-', b'+', b'!', b'=', b'_', b'#'];
+    // NOTE: Forbidden characters in Windows are: < > : " / \ | ? *
 
     let alphabet = additional
         .iter()
@@ -23,7 +24,10 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
         .rev()
         .collect::<Vec<u8>>();
     let alphabet_len = alphabet.len() as u64;
-    assert!(alphabet_len >= 41);
+    #[allow(clippy::panic)] // XXX: https://github.com/rust-lang/rust-clippy/issues/7433
+    {
+        assert!(alphabet_len >= 41, "{} symbols is not enough", alphabet_len);
+    }
     let mut result = [alphabet[0]; 12];
     let mut idx = 0;
     let mut num = num;
@@ -110,24 +114,15 @@ impl<K: PathKind> EncodedPath<K> {
         EncodedPath(self.0, PhantomData::default())
     }
 
+    /// # Example
+    /// ```
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = EncodedPath::from_vec(b"foo/bar/baz".to_vec());
+    /// assert_eq!(path.as_bytes(), &b"foo/bar/baz"[..]);
+    /// ```
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
-    }
-
-    /// Splits path into filename and directory name.
-    #[must_use]
-    pub fn split_parent(&self) -> (&[u8], &[u8]) {
-        let slash = self
-            .0
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, x)| **x == b'/')
-            .map(|(idx, _)| idx)
-            .unwrap_or_default();
-        let slice = &self.0[..];
-        slice.split_at(slash)
     }
 
     /// ```rust
@@ -156,22 +151,64 @@ impl<K: PathKind> EncodedPath<K> {
     /// Crops path to fit it into `max_length` bytes.
     /// Tries to preserve extension and most of filename by replacing tail with hash.
     /// Since resulting string contains hash, it extremely likely won't collide with other cropped path.
+    ///
+    /// This function is not intended to be used with extremely low limits (recommended at least 25)
+    ///
+    /// # Examples
+    ///
+    /// Short path:
+    /// ```rust
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = EncodedPath::from_vec(b"a/b/c/d".to_vec());
+    /// assert_eq!(path.crop_name_to(10_usize).as_ref(), b"a/b/c/d");
+    /// ```
+    ///
+    /// Long path that should be cropped, but limit is extremely low.
+    /// ```should_panic
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = EncodedPath::from_vec(b"foo/bar/baz/spam/eggs".to_vec());
+    /// let cropped = path.crop_name_to(10_usize);
+    /// ```
+    ///
+    /// Cropping to 25 symbols:
+    /// ```
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = EncodedPath::from_vec(b"foo/bar/baz/spam/eggs/very_long_filename".to_vec());
+    /// let cropped = path.crop_name_to(25_usize);
+    /// assert_eq!(cropped.as_ref(), b"foo/bar/baz/s!MMDDY-P_9VA");
+    /// assert_eq!(cropped.len(), 25);
+    /// ```
+    ///
+    /// Extension is preserved when possible:
+    /// ```
+    /// # use colbak_lib::path::EncodedPath;
+    /// let path = EncodedPath::from_vec(b"foo/bar/baz/spam/eggs/with_extension.txt".to_vec());
+    /// let cropped = path.crop_name_to(25_usize);
+    /// assert_eq!(cropped.as_ref(), b"foo/bar/bV-GK2T=9S8UG.txt");
+    /// assert_eq!(cropped.len(), 25);
+    /// ```
     #[must_use]
     pub fn crop_name_to<L: Into<usize>>(&self, max_length: L) -> Cow<[u8]> {
+        const EXTENSION_LENGTH: usize = 10;
+        const HASH_LENGTH: usize = 12;
+
         let max_length = max_length.into();
         if self.0.len() <= max_length {
             return Cow::Borrowed(&self.0);
         }
+        assert!(max_length > HASH_LENGTH + EXTENSION_LENGTH);
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.0.hash(&mut hasher);
         let hash = hasher.finish();
 
-        let hash = u64_to_ascii(hash);
-        let ext_start = self.0.len() - 10;
-        let dot = (&self.0[ext_start..])
-            .iter()
-            .rposition(|&x| x == b'.')
+        let hash: [u8; HASH_LENGTH] = u64_to_ascii(hash);
+        let ext_start = self.0.len() - EXTENSION_LENGTH;
+        let dot = self.0.iter()
+            .enumerate()
+            .skip(ext_start)
+            .rfind(|(_, &x)| x == b'.')
+            .map(|(idx, _)| idx)
             .unwrap_or(self.0.len());
         let (name, extension) = self.0.split_at(dot);
         let space_available = max_length - extension.len() - hash.len();
@@ -195,12 +232,38 @@ pub trait EscapedString {
 }
 
 impl<T: PathKind> EscapedString for EncodedPath<T> {
+    /// # Example
+    /// ```
+    /// # use colbak_lib::path::{EncodedPath, EscapedString};
+    /// let path = EncodedPath::from_vec(b"Hello \xC3\x28 world".to_vec());
+    /// assert_eq!(path.escaped(), "Hello \\xC3( world");
+    /// ```
     fn escaped(&self) -> Cow<str> {
         self.0.escaped()
     }
 }
 
 impl EscapedString for [u8] {
+    /// # Examples
+    /// 
+    /// Strings are preserved as-is when possible:
+    /// ```
+    /// # use colbak_lib::path::EscapedString;
+    /// assert_eq!(b"Hello world".escaped(), "Hello world");
+    /// ```
+    /// 
+    /// NUL byte don't get escaped, it's a valid character in unicode:
+    /// ```
+    /// # use colbak_lib::path::EscapedString;
+    /// assert_eq!(b"Hello \0 world".escaped(), "Hello \0 world");
+    /// ```
+    /// 
+    /// Some invalid unicode:
+    /// ```
+    /// # use colbak_lib::path::EscapedString;
+    /// assert_eq!(b"Hello \xC3\x28 world!".escaped(), "Hello \\xC3( world!");
+    /// assert_eq!(b"Hello \xF4\xBF\xBF\xBF world!".escaped(), "Hello \\xF4\\xBF\\xBF\\xBF world!");
+    /// ```
     fn escaped(&self) -> Cow<str> {
         let mut remaining = self;
         let mut result = String::new();
@@ -225,38 +288,5 @@ impl EscapedString for [u8] {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::path::EscapedString;
-
-    #[test]
-    fn test_escape_good() {
-        let ascii = b"Hello world!";
-        let escaped = ascii.escaped();
-        assert_eq!(escaped, "Hello world!");
-    }
-
-    #[test]
-    fn test_escape_zero() {
-        let ascii = b"Hello \0 world!";
-        let escaped = ascii.escaped();
-        assert_eq!(escaped, "Hello \0 world!");
-    }
-
-    #[test]
-    fn test_escape_wrong_unicode() {
-        let ascii = b"Hello \xC3\x28 world!";
-        let escaped = ascii.escaped();
-        assert_eq!(escaped, "Hello \\xC3( world!");
-    }
-
-    #[test]
-    fn test_escape_wrong_unicode_another() {
-        let ascii = b"Hello \xF4\xBF\xBF\xBF world!";
-        let escaped = ascii.escaped();
-        assert_eq!(escaped, "Hello \\xF4\\xBF\\xBF\\xBF world!");
     }
 }

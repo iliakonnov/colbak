@@ -3,15 +3,19 @@
 
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::io::Write;
 use std::sync::Mutex;
 use time::OffsetDateTime;
 
+#[cfg(not(test))]
+type LoggingTarget = std::io::BufWriter<std::fs::File>;
+
+#[cfg(test)]
+type LoggingTarget = Vec<u8>;
+
 pub struct Logging {
     // Creating json_serde::Serializer is cheap.
-    json: BufWriter<File>,
+    json: LoggingTarget,
 }
 
 #[allow(non_upper_case_globals)]
@@ -29,6 +33,7 @@ pub mod groups {
 }
 
 #[allow(clippy::unwrap_used)]
+#[cfg(not(test))]
 pub fn get_log(
     source: &'static OnceCell<Mutex<Logging>>,
     name: &'static str,
@@ -40,10 +45,23 @@ pub fn get_log(
             .create(true)
             .truncate(false)
             .append(true)
-            .open(PathBuf::from("logs/").join(name).with_extension("json"))
+            .open(std::path::PathBuf::from("logs/").join(name).with_extension("json"))
             .unwrap();
         Mutex::new(Logging {
-            json: BufWriter::new(file),
+            json: std::io::BufWriter::new(file),
+        })
+    })
+}
+
+#[cfg(test)]
+pub fn get_log(
+    source: &'static OnceCell<Mutex<Logging>>,
+    _name: &'static str,
+) -> &'static Mutex<Logging> {
+    source.get_or_init(|| {
+        let buffer = Vec::new();
+        Mutex::new(Logging {
+            json: buffer,
         })
     })
 }

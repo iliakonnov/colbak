@@ -291,7 +291,7 @@ impl Default for Archive {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use super::*;
 
     #[test]

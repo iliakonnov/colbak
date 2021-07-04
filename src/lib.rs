@@ -26,6 +26,8 @@
     clippy::unreadable_literal,
     // For me, it's better to make as many arms, as many variants in enum.
     clippy::match_same_arms,
+    // I think that this lints reduces readability
+    clippy::map_unwrap_or,
     // Again, I do not think that this lint is needed.
     clippy::module_name_repetitions,
     // This lint is useful, but too annoying

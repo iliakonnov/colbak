@@ -186,7 +186,7 @@ impl<'a> Diff<'a> {
     }
 }
 
-/// Small structure that helps making efficient queries to the [`Difference`](Difference).
+/// Small structure that helps making efficient queries to the [`Diff`](Diff).
 #[must_use]
 pub struct DiffQuery<'a> {
     diff: &'a Diff<'a>,
