@@ -29,7 +29,7 @@ pub struct CpioHeader {
     uid: u16,
     gid: u16,
     /// Number of links. This archiver does not aware of hard links, so this field is mostly useless.
-    /// It is set to `1` for files, to `2` for directories and `0` for everything else.
+    /// It is set to `1` for files and TRAILER, to `2` for directories and `0` for everything else.
     nlink: u16,
     /// `rdev` field is used for storing higher bits of file size.
     /// This allows us to decode files up to 2^48 = 256TB, but is not supported by normal archivers.
@@ -50,6 +50,12 @@ const TRAILER: &[u8] = b"TRAILER!!!\0";
 const TRAILER_LEN: u16 = TRAILER.len() as u16;
 
 /// Splits single `u32` into two `u16`.
+/// 
+/// # Example
+/// ```
+/// # use colbak_lib::cpio::convert_u32;
+/// assert_eq!(convert_u32(0xC0FF_EE11), [0xC0FF, 0xEE11]);
+/// ```
 #[must_use]
 pub fn convert_u32(n: u32) -> [u16; 2] {
     let lower = n & 0x0000_FFFF;
@@ -59,6 +65,12 @@ pub fn convert_u32(n: u32) -> [u16; 2] {
 }
 
 /// Reverse of [`convert_u32`](convert_u32)
+/// 
+/// # Example
+/// ```
+/// # use colbak_lib::cpio::decode_u32;
+/// assert_eq!(decode_u32([0xC0FF, 0xEE11]), 0xC0FF_EE11);
+/// ```
 #[must_use]
 pub fn decode_u32(x: [u16; 2]) -> u32 {
     let (higher, lower) = (u32::from(x[0]), u32::from(x[1]));
@@ -68,6 +80,13 @@ pub fn decode_u32(x: [u16; 2]) -> u32 {
 /// Encodes unix timestamp into two bytes.
 /// Any date between 1970.01.01 and 2106.02.07 will be stored without any losses.
 /// Date outside of this range will be represented as `[0, 0]` or `[0xFFFF, 0xFFFF]`
+/// 
+/// ```
+/// # use colbak_lib::cpio::encode_timestamp;
+/// assert_eq!(encode_timestamp(0xC0FF_EE11), [0xC0FF, 0xEE11]);
+/// assert_eq!(encode_timestamp(0x12_0000_0000), [0xFFFF, 0xFFFF]);
+/// assert_eq!(encode_timestamp(-1), [0, 0]);
+/// ```
 #[must_use]
 pub fn encode_timestamp(x: i64) -> [u16; 2] {
     match x {
@@ -92,7 +111,7 @@ impl CpioHeader {
             mode: 0,
             uid: 0,
             gid: 0,
-            nlink: 0,
+            nlink: 1,
             rdev: 0,
             mtime: [0, 0],
             namesize: TRAILER_LEN,
@@ -112,6 +131,8 @@ impl CpioHeader {
     }
 
     /// Returns true when current entry is an `TRAILER!!!` entry.
+    /// 
+    /// Note: name must be NUL-ended.
     #[must_use]
     pub fn is_trailer(&self, name: &[u8]) -> bool {
         matches!(
@@ -120,6 +141,7 @@ impl CpioHeader {
                 mode: 0,
                 namesize: TRAILER_LEN,
                 filesize: [0, 0],
+                nlink: 1,
                 ..
             }
         ) && name == TRAILER
@@ -287,26 +309,5 @@ impl Archive {
 impl Default for Archive {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn timestamp_small() {
-        assert_eq!(encode_timestamp(-42), [0, 0]);
-    }
-
-    #[test]
-    fn timestamp_normal() {
-        assert_eq!(encode_timestamp(10), [0, 10]);
-        assert_eq!(encode_timestamp(0x60DB_8840), [0x60DB, 0x8840]);
-    }
-
-    #[test]
-    fn timestamp_big() {
-        assert_eq!(encode_timestamp(i64::from(u32::MAX) + 42), [0xFFFF, 0xFFFF]);
     }
 }
