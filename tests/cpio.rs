@@ -107,3 +107,6 @@ async fn big_archive() {
 
     assert_eq!(buffer, EXPECTED);
 }
+
+// FIXME: Add tests for directory creation
+// FIXME: Add tests for cropped filenames

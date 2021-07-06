@@ -2,7 +2,7 @@ use crate::serde_b64;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct Checksum(#[serde(with = "serde_b64")] pub [u8; 32]);
 
@@ -23,5 +23,11 @@ impl std::fmt::Display for Checksum {
         }
         f.write_str("}")?;
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for Checksum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
     }
 }

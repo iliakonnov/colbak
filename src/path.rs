@@ -50,7 +50,7 @@ fn u64_to_ascii(num: u64) -> [u8; 12] {
 /// Represents path using bytes with following requirements:
 /// - `/` symbol is used as separator. Windows nor ntfs-3g does not allow this character, so it is safe to use.
 /// - `.` symbol is encoded as b"." when possible. It is a plain ASCII symbol, so we should not have any problems.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Eq)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Eq)]
 pub struct EncodedPath<K: PathKind>(
     #[serde(with = "serde_b64")] Vec<u8>,
     #[serde(skip, default)] std::marker::PhantomData<K>,
@@ -288,5 +288,12 @@ impl EscapedString for [u8] {
                 }
             }
         }
+    }
+}
+
+impl<P: PathKind> std::fmt::Debug for EncodedPath<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let escaped = self.escaped();
+        write!(f, "EncodedPath({})", escaped)
     }
 }

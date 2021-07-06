@@ -45,9 +45,9 @@ impl Reader<'_> {
 
 /// State machine for [`Reader`](Reader)
 /// ```text
-///                                  ↙--↖
+///     ↙--------↖                   ↙--↖
 /// None -> Header -> OpeningFile -> File -> None again
-///     \-> Trailer -> EOF-⸜ 
+///     \-> Trailer -> EOF-⸜
 ///                     ↖--/
 /// ```
 enum State<'a> {
@@ -82,7 +82,10 @@ impl SmartRead for State<'_> {
                     Either::Left(header) => State::Header(header),
                     Either::Right(trailer) => State::Trailer(trailer),
                 },
-                State::Header => State::OpeningFile,
+                State::Header => |x| match x {
+                    Either::Left(file) => State::OpeningFile(file),
+                    Either::Right(none) => State::None(none),
+                },
                 State::OpeningFile => State::File,
                 State::File => |x| match x {
                     Either::Left(file) => State::File(file),
@@ -158,22 +161,29 @@ impl<'a> Advanceable for states::None<'a> {
 }
 
 impl<'a> Advanceable for states::Header<'a> {
-    type Next = states::OpeningFile<'a>;
+    type Next = Either<states::OpeningFile<'a>, states::None<'a>>;
     fn advance(
-        self,
+        mut self,
         _cx: &mut Context<'_>,
         buf: &mut SmartBuf<'_, '_, '_>,
     ) -> AdvanceResult<Self, Self::Next> {
         let header = self.file.header();
         buf.put_slice(&header);
 
-        let future = self.file.read_fut();
+        let next = if self.file.info.size().is_some() {
+            let future = self.file.read_fut();
 
-        let res = states::OpeningFile {
-            none: self.none,
-            future: Box::pin(future),
+            Either::Left(states::OpeningFile {
+                none: self.none,
+                future: Box::pin(future),
+            })
+        } else {
+            // Move to the next file, nothing to write here: there is no size.
+            self.none.position += 1;
+
+            Either::Right(self.none)
         };
-        AdvanceResult::Ready(res)
+        AdvanceResult::Ready(next)
     }
 }
 

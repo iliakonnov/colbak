@@ -71,6 +71,7 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
         if size % 2 != 0 {
             size += 1;
         }
+        #[allow(clippy::cast_possible_wrap)] // size can't be moore than 2^48
         self.reader.seek(SeekFrom::Current(size as i64)).await?;
         Ok(Reader {
             reader: self.reader,
