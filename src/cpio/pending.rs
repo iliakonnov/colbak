@@ -2,7 +2,7 @@ use crate::cpio::smart_read::{SmartBuf, SmartRead, SmartReader};
 use crate::cpio::state_machine::{AdvanceResult, Advanceable};
 use crate::cpio::CpioHeader;
 use crate::fileinfo::{Info, UnspecifiedInfo};
-use crate::path::Local;
+use crate::path::{Local, PathKind};
 use crate::types::Checksum;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -15,9 +15,12 @@ use tokio::fs::File;
 use tokio::io::AsyncRead;
 
 /// File in archive that is not archived yet.
+/// 
+/// Note: currently only used `P` is [`Local`](Local)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Pending {
-    pub info: Info<Local>,
+#[serde(bound = "P:")]
+pub struct Pending<P: PathKind> {
+    pub info: Info<P>,
     /// Checksum computed when reading this file. May differ from one in info.
     pub calculated: Option<Checksum>,
 }
@@ -35,14 +38,16 @@ pub type PendingReader<'a> = impl AsyncRead + 'a;
 pub type OpeningReadFuture<'a> =
     impl std::future::Future<Output = Result<PendingReader<'a>, CantOpen>>;
 
-impl Pending {
-    pub fn new(info: Info<Local>) -> Self {
+impl<P: PathKind> Pending<P> {
+    pub fn new(info: Info<P>) -> Self {
         Self {
             info,
             calculated: None,
         }
     }
+}
 
+impl Pending<Local> {
     /// Opens file for reading and returns it.
     /// After file is completely read, [`self.calculated`] will be updated
     ///
@@ -87,7 +92,7 @@ pub enum Reading<'a> {
     /// Fle successfully was read.
     Done(states::Done<'a>),
     /// Computed information differs from expected (stored in info).
-    Mismatch(Mismatch),
+    Mismatch(Mismatch<Local>),
 }
 
 impl SmartRead for Reading<'_> {
@@ -112,14 +117,14 @@ impl SmartRead for Reading<'_> {
 }
 
 #[derive(Debug, Snafu)]
-pub enum Mismatch {
+pub enum Mismatch<P: PathKind> {
     HashMismatch {
-        pending: Pending,
+        pending: Pending<P>,
         expected: Checksum,
         found: Checksum,
     },
     SizeMismatch {
-        pending: Pending,
+        pending: Pending<P>,
         expected: u64,
         found: u64,
     },
@@ -130,14 +135,14 @@ mod states {
     use super::*;
 
     pub struct File<'a> {
-        pub pending: &'a mut Pending,
+        pub pending: &'a mut Pending<Local>,
         pub opened: Pin<Box<tokio::fs::File>>,
         pub hasher: Sha256,
         pub length: u64,
     }
 
     pub struct Done<'a> {
-        pub pending: &'a mut Pending,
+        pub pending: &'a mut Pending<Local>,
         pub checksum: Checksum,
     }
 }
@@ -194,7 +199,8 @@ impl<'a> Advanceable for states::File<'a> {
     }
 }
 
-impl Advanceable for Mismatch {
+// TODO: This impl does not look good
+impl Advanceable for Mismatch<Local> {
     type Next = Self;
 
     fn advance(

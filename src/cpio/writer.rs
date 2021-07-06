@@ -99,6 +99,8 @@ impl SmartRead for State<'_> {
 
 /// See [`State`](State) enum
 mod states {
+    use crate::path::Local;
+
     use super::*;
 
     pub struct None<'a> {
@@ -109,7 +111,7 @@ mod states {
 
     pub struct Header<'a> {
         pub none: None<'a>,
-        pub file: &'a mut super::Pending,
+        pub file: &'a mut super::Pending<Local>,
     }
 
     pub struct OpeningFile<'a> {

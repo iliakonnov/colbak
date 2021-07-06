@@ -1,9 +1,10 @@
 use super::CpioHeader;
 use crate::fileinfo::Info;
-use crate::path::{External, Local};
+use crate::path::External;
 use snafu::{OptionExt, ResultExt, Snafu};
+use std::io::SeekFrom;
 use std::mem::size_of;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 
 /// Extractor of cpio archive.
 pub struct Reader<R> {
@@ -37,9 +38,13 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
     where
         W: AsyncWrite + Unpin,
     {
+        // TODO: What if it is a directory or not-a-file?
+
         let size = self.header.size();
         let mut file = self.reader.take(size);
 
+        // FIXME: Checksum is not computed. I used to have a wrapper that computes checksum.
+        // It should be computed by caller, not here.
         let mut buf = vec![0; 1024 * 1024];
         loop {
             let len = file.read(&mut buf).await?;
@@ -58,9 +63,18 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
     }
 
     /// Skips this file completely
-    pub async fn skip(self) -> Result<Reader<R>, ReadError> {
-        let mut sink = tokio::io::sink();
-        self.drain_to(&mut sink).await
+    pub async fn skip(mut self) -> Result<Reader<R>, ReadError>
+    where
+        R: AsyncSeek,
+    {
+        let mut size = self.header.size();
+        if size % 2 != 0 {
+            size += 1;
+        }
+        self.reader.seek(SeekFrom::Current(size as i64)).await?;
+        Ok(Reader {
+            reader: self.reader,
+        })
     }
 
     /// Extracts info about this file
@@ -74,7 +88,7 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
 /// Optional metadata that is stored in the `TRAILER!!!` entry.
 #[derive(Debug, Clone)]
 pub struct UnpackedArchive {
-    pub files: Option<Vec<Info<Local>>>,
+    pub files: Option<Vec<Info<External>>>,
 }
 
 pub enum NextItem<R> {

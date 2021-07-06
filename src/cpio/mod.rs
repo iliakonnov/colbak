@@ -273,7 +273,7 @@ impl CpioHeader {
 /// Pending cpio archive, waiting for be written.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Archive {
-    files: Vec<Pending>,
+    files: Vec<Pending<Local>>,
 }
 
 impl Archive {
