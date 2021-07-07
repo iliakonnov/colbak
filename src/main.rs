@@ -152,10 +152,10 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
             let before = database.readonly_snapshot(SqlName::new(before)?)?;
             let after = database.readonly_snapshot(SqlName::new(after)?)?;
             let diff = database.compare_snapshots(&before, &after)?;
-            /*diff.query().for_each::<_, Infallible>(|row| {
+            diff.query().for_each::<_, Infallible>(|row| {
                 println!("{:#?}", row);
                 Ok(())
-            })??;*/
+            })??;
             Ok(())
         }
     }

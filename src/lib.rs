@@ -17,6 +17,10 @@
     clippy::unwrap_used, clippy::expect_used, clippy::panic
 )]
 #![allow(
+    // Waiting for https://github.com/rust-lang/rust-clippy/issues/7422 to be available in nightly.
+    clippy::nonstandard_macro_braces
+)]
+#![allow(
     // Handled by lints above
     clippy::missing_panics_doc,
     // This is not a library, sorry
@@ -33,8 +37,8 @@
     clippy::wildcard_imports,
 )]
 
-pub use time::OffsetDateTime as DateTime;
 pub use sha2::Sha256 as DefaultDigest;
+pub use time::OffsetDateTime as DateTime;
 
 #[macro_use]
 pub mod logging;

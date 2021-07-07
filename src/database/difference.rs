@@ -217,7 +217,7 @@ impl<'a> DiffQuery<'a> {
             .db
             .conn
             .query_row(
-                &fmt_sql!("SELECT INFO FROM {source}.snap WHERE id=?"),
+                &fmt_sql!("SELECT info FROM {source}.snap WHERE id=?"),
                 params![id],
                 |row| row.get(0),
             )
@@ -273,6 +273,7 @@ impl<'a> DiffQuery<'a> {
             let rowid = row.get(5).context(SqliteFailed)?;
 
             let kind = DiffType::parse(kind).context(WrongDiffType { found: kind })?;
+            // FIXME: This is not fast at all.
             let before = self.load_info(self.diff.before_snap, before)?;
             let after = self.load_info(self.diff.after_snap, after)?;
             let path = EncodedPath::from_vec(path);
