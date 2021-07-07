@@ -42,9 +42,6 @@ where
 
     // Zero out c_dev. In our format that field stores higher bits of inode.
     (&mut buffer[2..=3]).copy_from_slice(&[0, 0]);
-
-    // Copy user id and gid.
-    (&mut buffer[8..=12]).copy_from_slice(&expected[8..=12]);
 }
 
 #[tokio::test]
@@ -57,7 +54,7 @@ async fn empty() {
 
 #[tokio::test]
 async fn odd_named_file() {
-    // echo "tests/archive/odd" | cpio -o --io-size=1 --ignore-devno > tests/odd_named_file.cpio
+    // SH: echo "tests/archive/odd" | cpio -o --io-size=1 --ignore-devno > tests/odd_named_file.cpio
     const EXPECTED: &[u8] = include_bytes!("odd_named_file.cpio");
 
     let mut archive = colbak_lib::cpio::Archive::new();
@@ -74,7 +71,7 @@ async fn odd_named_file() {
 
 #[tokio::test]
 async fn even_named_file() {
-    // echo "tests/archive/even" | cpio -o --io-size=1 --ignore-devno > tests/even_named_file.cpio
+    // SH: echo "tests/archive/even" | cpio -o --io-size=1 --ignore-devno > tests/even_named_file.cpio
     const EXPECTED: &[u8] = include_bytes!("even_named_file.cpio");
 
     let mut archive = colbak_lib::cpio::Archive::new();
@@ -90,7 +87,7 @@ async fn even_named_file() {
 
 #[tokio::test]
 async fn big_archive() {
-    // find tests/archive | sort | tee /dev/fd/2 | cpio -o --io-size=1 --ignore-devno > tests/big_archive.cpio
+    // SH: find tests/archive -type f | sort | tee /dev/fd/2 | cpio -o --io-size=1 --ignore-devno > tests/big_archive.cpio
     const EXPECTED: &[u8] = include_bytes!("big_archive.cpio");
 
     let mut archive = colbak_lib::cpio::Archive::new();

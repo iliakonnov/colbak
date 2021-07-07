@@ -50,7 +50,7 @@ const TRAILER: &[u8] = b"TRAILER!!!\0";
 const TRAILER_LEN: u16 = TRAILER.len() as u16;
 
 /// Splits single `u32` into two `u16`.
-/// 
+///
 /// # Example
 /// ```
 /// # use colbak_lib::cpio::convert_u32;
@@ -65,7 +65,7 @@ pub fn convert_u32(n: u32) -> [u16; 2] {
 }
 
 /// Reverse of [`convert_u32`](convert_u32)
-/// 
+///
 /// # Example
 /// ```
 /// # use colbak_lib::cpio::decode_u32;
@@ -80,7 +80,7 @@ pub fn decode_u32(x: [u16; 2]) -> u32 {
 /// Encodes unix timestamp into two bytes.
 /// Any date between 1970.01.01 and 2106.02.07 will be stored without any losses.
 /// Date outside of this range will be represented as `[0, 0]` or `[0xFFFF, 0xFFFF]`
-/// 
+///
 /// ```
 /// # use colbak_lib::cpio::encode_timestamp;
 /// assert_eq!(encode_timestamp(0xC0FF_EE11), [0xC0FF, 0xEE11]);
@@ -131,7 +131,7 @@ impl CpioHeader {
     }
 
     /// Returns true when current entry is an `TRAILER!!!` entry.
-    /// 
+    ///
     /// Note: name must be NUL-ended.
     #[must_use]
     pub fn is_trailer(&self, name: &[u8]) -> bool {
@@ -190,8 +190,8 @@ impl CpioHeader {
             magic: MAGIC,
             dev_ino: convert_u32(info.inode as u32),
             mode: mode as u16,
-            uid: 0,
-            gid: 0,
+            uid: info.user_id as u16,
+            gid: info.group_id as u16,
             nlink,
             rdev: rdev as u16,
             mtime: encode_timestamp(info.modified_at.unix_timestamp()),
@@ -245,7 +245,7 @@ impl CpioHeader {
     }
 
     /// Extracts info from header, using provided name.
-    /// 
+    ///
     /// `info.hash` will be set to None.
     #[must_use]
     pub fn info(&self, name: &[u8]) -> Info<External> {
@@ -264,6 +264,8 @@ impl CpioHeader {
             path: EncodedPath::from_vec(name.to_vec()),
             inode: decode_u32(self.dev_ino).into(),
             mode: mode.into(),
+            user_id: self.uid.into(),
+            group_id: self.gid.into(),
             created_at: DateTime::from_unix_timestamp(0),
             modified_at: DateTime::from_unix_timestamp(decode_u32(self.mtime).into()),
             hash: None,
