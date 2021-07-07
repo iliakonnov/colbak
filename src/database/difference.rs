@@ -147,16 +147,18 @@ impl<'a> Diff<'a> {
                     INSERT INTO {name}.diff
                         (before, after, type, size, path)
                     SELECT
-                        id, NULL,  {deleted}, size, path
+                        id, NULL, {deleted}, size, path
                     FROM {before}.snap
-                    WHERE identifier NOT IN (SELECT identifier FROM {after}.snap);
+                    WHERE length(identifier) > 0
+                        AND identifier NOT IN (SELECT identifier FROM {after}.snap);
 
                     INSERT INTO {name}.diff
                         (before, after, type, size, path)
                     SELECT
                         NULL, id, {created}, size, path
                     FROM {after}.snap
-                    WHERE identifier NOT IN (SELECT identifier FROM {before}.snap);
+                    WHERE length(identifier) > 0
+                        AND identifier NOT IN (SELECT identifier FROM {before}.snap);
 
                     INSERT INTO {name}.diff
                         (before, after, type, size, path)
@@ -164,12 +166,13 @@ impl<'a> Diff<'a> {
                         {before}.snap.id,
                         {after}.snap.id,
                         {changed},
-                        size,
-                        path
+                        {after}.snap.size,
+                        {after}.snap.path
                     FROM {after}.snap
-                        INNER JOIN {before}.snap
+                    INNER JOIN {before}.snap
                         USING (identifier)
-                    WHERE {after}.snap.info != {before}.snap.info;
+                    WHERE length(identifier) > 0
+                        AND {after}.snap.info != {before}.snap.info;
                 "#
             ))
             .context(SqliteFailed)?;

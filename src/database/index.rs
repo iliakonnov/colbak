@@ -100,6 +100,7 @@ impl Database {
                     CREATE TABLE {name}.snap (
                         id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                         path STRING,
+                        size INTEGER,
                         identifier BLOB,   /* binary data */
                         info TEXT          /* json */
                     );
@@ -109,7 +110,9 @@ impl Database {
             ))
             .context(SqliteFailed)?;
             txn.execute(
-                "INSERT INTO snapshots(name, created_at, filled) VALUES (:name, :created_at, 0)",
+                fmt_sql!(static
+                    "INSERT INTO snapshots(name, created_at, filled_at) VALUES (:name, :created_at, 0)"
+                ),
                 named_params![
                     ":name": name.0,
                     ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),

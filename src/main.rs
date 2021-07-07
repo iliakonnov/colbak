@@ -2,10 +2,12 @@
 
 use colbak_lib::cpio::reader::NextItem;
 use colbak_lib::cpio::Archive;
+use colbak_lib::database::{Database, SqlName};
 use colbak_lib::fileinfo::{Info, UnspecifiedInfo};
 use colbak_lib::path::Local;
 use colbak_lib::stream_hash::stream_hash;
 use colbak_lib::types::Checksum;
+use std::convert::Infallible;
 use std::error::Error as StdError;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -26,6 +28,10 @@ enum Opt {
     },
     /// Reads archive from stdin and lists files
     ListCpio,
+    /// Creates a snapshot of specified directory
+    CreateSnapshot { database: PathBuf, root: PathBuf },
+    /// Computes difference between snapshots
+    DiffSnapshot { database: PathBuf, before: String, after: String },
 }
 
 async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
@@ -132,6 +138,25 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
                     }
                 }
             }
+        }
+        Opt::CreateSnapshot { database, root } => {
+            let mut database = colbak_lib::database::Database::open(database)?;
+            let name = SqlName::now();
+            let mut snapshot = database.open_snapshot(name)?;
+            snapshot.filler()?.fill(&root)?.save()?;
+            println!("Created snapshot {}", snapshot.name());
+            Ok(())
+        },
+        Opt::DiffSnapshot { database, before, after } => {
+            let database = Database::open(database)?;
+            let before = database.readonly_snapshot(SqlName::new(before)?)?;
+            let after = database.readonly_snapshot(SqlName::new(after)?)?;
+            let diff = database.compare_snapshots(&before, &after)?;
+            /*diff.query().for_each::<_, Infallible>(|row| {
+                println!("{:#?}", row);
+                Ok(())
+            })??;*/
+            Ok(())
         }
     }
 }
