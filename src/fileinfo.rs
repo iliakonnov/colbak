@@ -45,7 +45,7 @@ pub struct DirInfo {}
 pub struct UnknownInfo {}
 
 /// Used when you need to store Info for different kinds under the same type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum UnspecifiedInfo {
     File(FileInfo),
     Dir(DirInfo),

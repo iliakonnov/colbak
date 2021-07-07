@@ -4,9 +4,10 @@ use crate::cpio::CpioHeader;
 use crate::fileinfo::{Info, UnspecifiedInfo};
 use crate::path::{Local, PathKind};
 use crate::types::Checksum;
+use crate::DefaultDigest;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use snafu::{ResultExt, Snafu};
 use std::io;
 use std::pin::Pin;
@@ -39,6 +40,7 @@ pub type OpeningReadFuture<'a> =
     impl std::future::Future<Output = Result<PendingReader<'a>, CantOpen>>;
 
 impl<P: PathKind> Pending<P> {
+    #[must_use]
     pub fn new(info: Info<P>) -> Self {
         Self {
             info,
@@ -61,7 +63,7 @@ impl Pending<Local> {
         let reading = Reading::File(states::File {
             pending: self,
             opened: Box::pin(file),
-            hasher: Sha256::default(),
+            hasher: DefaultDigest::default(),
             length: 0,
         });
         Ok(SmartReader::new(reading))
@@ -73,6 +75,7 @@ impl Pending<Local> {
     }
 
     /// Returns [cpio header](CpioHeader) for this file.
+    #[must_use]
     pub fn header(&self) -> Vec<u8> {
         CpioHeader::encode(&self.info)
     }
@@ -120,8 +123,8 @@ impl SmartRead for Reading<'_> {
 pub enum Mismatch<P: PathKind> {
     HashMismatch {
         pending: Pending<P>,
-        expected: Checksum,
-        found: Checksum,
+        expected: Box<Checksum>,
+        found: Box<Checksum>,
     },
     SizeMismatch {
         pending: Pending<P>,
@@ -137,7 +140,7 @@ mod states {
     pub struct File<'a> {
         pub pending: &'a mut Pending<Local>,
         pub opened: Pin<Box<tokio::fs::File>>,
-        pub hasher: Sha256,
+        pub hasher: DefaultDigest,
         pub length: u64,
     }
 
@@ -177,13 +180,13 @@ impl<'a> Advanceable for states::File<'a> {
                     }
                 }
 
-                let checksum = self.hasher.into();
+                let checksum = self.hasher.finalize().into();
 
                 if let Some(expected) = self.pending.info.hash {
                     if checksum != expected {
                         return AdvanceResult::Ready(Reading::Mismatch(Mismatch::HashMismatch {
-                            expected,
-                            found: checksum,
+                            expected: Box::new(expected),
+                            found: Box::new(checksum),
                             pending: self.pending.clone(),
                         }));
                     }

@@ -1,13 +1,17 @@
 #![feature(backtrace)]
 
 use colbak_lib::cpio::reader::NextItem;
-use colbak_lib::fileinfo::Info;
+use colbak_lib::cpio::Archive;
+use colbak_lib::fileinfo::{Info, UnspecifiedInfo};
+use colbak_lib::path::Local;
+use colbak_lib::stream_hash::stream_hash;
+use colbak_lib::types::Checksum;
 use std::error::Error as StdError;
 use std::io::Cursor;
 use std::path::PathBuf;
+use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 
-use colbak_lib::cpio::Archive;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -19,9 +23,6 @@ enum Opt {
     UnpackCpio {
         /// Where extracted files will be located.
         output: PathBuf,
-        /// Compute checksums and check them with ones stored in the archive.
-        #[structopt(short, long)]
-        check_hashes: bool,
     },
     /// Reads archive from stdin and lists files
     ListCpio,
@@ -48,10 +49,10 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
                 }
                 stdout.write_all_buf(&mut Cursor::new(&mut buffer)).await?;
             }
-        },
+        }
         Opt::ListCpio => {
             let stdin = tokio::io::stdin();
-            let mut sink = tokio::io::sink();  // We can't seek stdin.
+            let mut sink = tokio::io::sink(); // We can't seek stdin.
             let mut archive = colbak_lib::cpio::Reader::new(stdin);
             loop {
                 match archive.advance().await? {
@@ -59,17 +60,79 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
                         let info = file.info();
                         println!("{:#?}", info);
                         archive = file.drain_to(&mut sink).await?;
-                    },
+                    }
                     NextItem::End(end) => {
                         if let Some(files) = end.files {
                             println!("{:#?}", files)
                         }
                         break Ok(());
-                    },
+                    }
                 }
             }
-        },
-        _ => todo!(),
+        }
+        Opt::UnpackCpio { output } => {
+            let stdin = tokio::io::stdin();
+            let mut archive = colbak_lib::cpio::Reader::new(stdin);
+            let mut hashes = Vec::new();
+            loop {
+                match archive.advance().await? {
+                    NextItem::File(file) => {
+                        let mut info = file.info();
+                        let path = info.path.clone().cast::<Local>().to_path()?;
+                        let dst = output.join(path);
+                        println!("Extracting {:?}...", dst);
+                        match info.data {
+                            UnspecifiedInfo::Dir(_) => {
+                                tokio::fs::create_dir(&dst).await?;
+                                archive = file.to_void().await?;
+                            }
+                            UnspecifiedInfo::File(_) => {
+                                let output = File::create(dst).await?;
+                                let mut hasher = stream_hash(output);
+                                archive = file.drain_to(&mut hasher).await?;
+                                let hash: Checksum = hasher.finalize().into();
+                                info.hash = Some(hash);
+                            }
+                            UnspecifiedInfo::Unknown(_) => {
+                                println!("\tSkipping unknown file.");
+                                archive = file.to_void().await?;
+                            }
+                        }
+                        hashes.push(info);
+                    }
+                    NextItem::End(end) => {
+                        let files = match end.files {
+                            Some(files) => files,
+                            None => break Ok(()),
+                        };
+                        for (expected, found) in files.into_iter().zip(hashes.into_iter()) {
+                            let total_match = expected == found;
+                            if total_match {
+                                continue;
+                            }
+                            if expected.path != found.path {
+                                eprintln!(
+                                    "Warning: path mismatch. Expected {:?}, found {:?}",
+                                    expected.path, found.path
+                                );
+                            }
+                            let hash_match = expected
+                                .hash
+                                .zip(found.hash)
+                                .map(|(x, y)| x == y)
+                                .unwrap_or(true);
+                            if !hash_match {
+                                eprintln!(
+                                    "Warning: hash mismatch at {:?}. Expected {:?}, found {:?}",
+                                    found.path, expected.hash, found.hash
+                                );
+                            }
+                        }
+                        break Ok(());
+                    }
+                }
+            }
+        }
     }
 }
 

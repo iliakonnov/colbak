@@ -4,7 +4,6 @@
     type_ascription,
     never_type,
     exhaustive_patterns,
-    min_specialization,
     try_blocks,
     arbitrary_enum_discriminant,
     format_args_capture,
@@ -35,6 +34,7 @@
 )]
 
 pub use time::OffsetDateTime as DateTime;
+pub use sha2::Sha256 as DefaultDigest;
 
 #[macro_use]
 pub mod logging;
@@ -46,4 +46,5 @@ pub mod fileinfo;
 pub mod packer;
 pub mod path;
 pub mod serde_b64;
+pub mod stream_hash;
 pub mod types;

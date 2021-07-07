@@ -1,6 +1,6 @@
 #[macro_use]
 mod state_machine;
-mod pending;
+pub mod pending;
 pub mod reader;
 mod smart_read;
 mod writer;
@@ -245,6 +245,8 @@ impl CpioHeader {
     }
 
     /// Extracts info from header, using provided name.
+    /// 
+    /// `info.hash` will be set to None.
     #[must_use]
     pub fn info(&self, name: &[u8]) -> Info<External> {
         use crate::fileinfo::{DirInfo, FileInfo, UnknownInfo};

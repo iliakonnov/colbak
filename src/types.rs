@@ -1,16 +1,18 @@
 use crate::serde_b64;
+use digest::generic_array::{ArrayLength, GenericArray};
 use serde::{Deserialize, Serialize};
-use sha2::Digest;
 
-#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+const LENGTH: usize = 64;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(transparent)]
-pub struct Checksum(#[serde(with = "serde_b64")] pub [u8; 32]);
+pub struct Checksum(#[serde(with = "serde_b64")] pub [u8; LENGTH]);
 
-impl<D: Digest> From<D> for Checksum {
-    fn from(x: D) -> Checksum {
-        let fin = x.finalize();
-        let mut arr = [0; 32];
-        arr.copy_from_slice(&fin[0..32]);
+impl<OutputSize: ArrayLength<u8>> From<GenericArray<u8, OutputSize>> for Checksum {
+    fn from(fin: GenericArray<u8, OutputSize>) -> Checksum {
+        let mut arr = [0; LENGTH];
+        let min_length = LENGTH.min(fin.len());
+        (&mut arr[..min_length]).copy_from_slice(&fin[..min_length]);
         Checksum(arr)
     }
 }

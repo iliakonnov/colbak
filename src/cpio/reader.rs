@@ -38,13 +38,9 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
     where
         W: AsyncWrite + Unpin,
     {
-        // TODO: What if it is a directory or not-a-file?
-
         let size = self.header.size();
         let mut file = self.reader.take(size);
 
-        // FIXME: Checksum is not computed. I used to have a wrapper that computes checksum.
-        // It should be computed by caller, not here.
         let mut buf = vec![0; 1024 * 1024];
         loop {
             let len = file.read(&mut buf).await?;
@@ -60,6 +56,11 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
         }
 
         Ok(Reader { reader })
+    }
+
+    /// Skips file on non-seekable reader
+    pub async fn to_void(self) -> Result<Reader<R>, ReadError> {
+        self.drain_to(&mut tokio::io::sink()).await
     }
 
     /// Skips this file completely
@@ -78,7 +79,7 @@ impl<R: AsyncRead + Unpin> ReadFile<R> {
         })
     }
 
-    /// Extracts info about this file
+    /// Extracts info about this file. Hash is not set.
     pub fn info(&self) -> Info<External> {
         // We should skip NUL byte in the end.
         let name = &self.filename[..self.filename.len() - 1];

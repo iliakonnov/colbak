@@ -78,7 +78,7 @@ impl EncodedPath<Local> {
     pub fn from_path(path: PathBuf) -> Self {
         let os = path.into_os_string();
         let vec = os_str_bytes::OsStringBytes::into_raw_vec(os);
-        EncodedPath::from_vec(vec).cast_to()
+        EncodedPath::from_vec(vec).cast()
     }
 
     /// Converts `EncodedPath` into `PathBuf` with correct separators matching current platform.
@@ -108,9 +108,9 @@ impl EncodedPath<External> {
 }
 
 impl<K: PathKind> EncodedPath<K> {
-    /// Changes kind of this path. Use with caution, explicitly private.
+    /// Changes kind of this path. Use with caution.
     #[must_use]
-    pub(self) fn cast_to<T: PathKind>(self) -> EncodedPath<T> {
+    pub fn cast<T: PathKind>(self) -> EncodedPath<T> {
         EncodedPath(self.0, PhantomData::default())
     }
 
