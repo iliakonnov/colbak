@@ -1,5 +1,5 @@
 #![feature(
-    min_type_alias_impl_trait,
+    type_alias_impl_trait,
     trait_alias,
     type_ascription,
     never_type,
