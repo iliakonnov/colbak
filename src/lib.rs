@@ -5,7 +5,6 @@
     never_type,
     exhaustive_patterns,
     try_blocks,
-    arbitrary_enum_discriminant,
     format_args_capture,
     backtrace
 )]
