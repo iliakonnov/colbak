@@ -16,10 +16,6 @@
     clippy::unwrap_used, clippy::expect_used, clippy::panic
 )]
 #![allow(
-    // Waiting for https://github.com/rust-lang/rust-clippy/issues/7422 to be available in nightly.
-    clippy::nonstandard_macro_braces
-)]
-#![allow(
     // Handled by lints above
     clippy::missing_panics_doc,
     // This is not a library, sorry
@@ -42,6 +38,10 @@ pub use time::OffsetDateTime as DateTime;
 #[macro_use]
 pub mod logging;
 
+#[macro_use]
+pub mod sql;
+
+pub mod cloud;
 pub mod cpio;
 pub mod database;
 pub mod fileext;

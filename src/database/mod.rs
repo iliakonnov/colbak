@@ -1,19 +1,6 @@
 //! This module contains code related to storing snapshots and computing differences.
 //! You won't find index of uploaded files here.
 
-macro_rules! fmt_sql {
-    (static $single:literal) => {{
-        let sql = $single;
-        //$crate::log!(fmt_sql: "fmt_sql: {}", sql);
-        sql
-    }};
-    ($($args:tt)*) => {{
-        let sql = format!($($args)*);
-        //$crate::log!(fmt_sql: "fmt_sql: {}", sql);
-        sql
-    }}
-}
-
 mod difference;
 mod error;
 mod index;
@@ -62,11 +49,11 @@ impl SqlName {
     }
 
     /// Creates name with current date and time
-    #[allow(clippy::unwrap_used)]
     #[must_use]
     pub fn now() -> SqlName {
         let name = time::OffsetDateTime::now_utc().format("at%Y_%m_%d_%H_%M_%S_%N");
         // PANIC: name is completely correct, so it's safe to unwrap here.
+        #[allow(clippy::unwrap_used)]
         SqlName::new(name).unwrap()
     }
 
