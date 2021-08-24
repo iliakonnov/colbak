@@ -4,7 +4,7 @@ use super::smart_read::SmartWrap;
 use super::state_machine::{AdvanceResult, Advanceable};
 use crate::cpio::smart_read::{SmartBuf, SmartRead};
 use crate::cpio::Archive;
-use either::Either;
+use crate::utils::Either;
 use pin_project_lite::pin_project;
 use std::future::Future;
 use std::io;

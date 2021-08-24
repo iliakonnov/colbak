@@ -1,9 +1,9 @@
 // FIXME: It's better to make logging non-panicking too
 #![allow(clippy::missing_panics_doc)]
 
-use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+use std::lazy::SyncOnceCell;
 use std::sync::Mutex;
 use time::OffsetDateTime;
 
@@ -21,21 +21,21 @@ pub struct Logging {
 #[allow(non_upper_case_globals)]
 pub mod groups {
     use super::Logging;
-    use once_cell::sync::OnceCell;
+    use std::lazy::SyncOnceCell;
     use std::sync::Mutex;
 
-    pub static warn: OnceCell<Mutex<Logging>> = OnceCell::new();
-    pub static error: OnceCell<Mutex<Logging>> = OnceCell::new();
-    pub static aws: OnceCell<Mutex<Logging>> = OnceCell::new();
-    pub static cli: OnceCell<Mutex<Logging>> = OnceCell::new();
-    pub static fmt_sql: OnceCell<Mutex<Logging>> = OnceCell::new();
-    pub static time: OnceCell<Mutex<Logging>> = OnceCell::new();
+    pub static warn: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
+    pub static error: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
+    pub static aws: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
+    pub static cli: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
+    pub static fmt_sql: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
+    pub static time: SyncOnceCell<Mutex<Logging>> = SyncOnceCell::new();
 }
 
 #[allow(clippy::unwrap_used)]
 #[cfg(not(test))]
 pub fn get_log(
-    source: &'static OnceCell<Mutex<Logging>>,
+    source: &'static SyncOnceCell<Mutex<Logging>>,
     name: &'static str,
 ) -> &'static Mutex<Logging> {
     source.get_or_init(|| {
@@ -45,7 +45,11 @@ pub fn get_log(
             .create(true)
             .truncate(false)
             .append(true)
-            .open(std::path::PathBuf::from("logs/").join(name).with_extension("json"))
+            .open(
+                std::path::PathBuf::from("logs/")
+                    .join(name)
+                    .with_extension("json"),
+            )
             .unwrap();
         Mutex::new(Logging {
             json: std::io::BufWriter::new(file),
@@ -55,14 +59,12 @@ pub fn get_log(
 
 #[cfg(test)]
 pub fn get_log(
-    source: &'static OnceCell<Mutex<Logging>>,
+    source: &'static SyncOnceCell<Mutex<Logging>>,
     _name: &'static str,
 ) -> &'static Mutex<Logging> {
     source.get_or_init(|| {
         let buffer = Vec::new();
-        Mutex::new(Logging {
-            json: buffer,
-        })
+        Mutex::new(Logging { json: buffer })
     })
 }
 

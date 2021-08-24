@@ -71,7 +71,7 @@ pub struct External(!);
 impl PathKind for External {}
 
 // We do not support exotic platforms, where MAIN_SEPARATOR is not ascii symbol.
-static_assertions::const_assert!(std::path::MAIN_SEPARATOR.is_ascii());
+const _: [(); 1] = [(); std::path::MAIN_SEPARATOR.is_ascii() as usize];
 
 impl EncodedPath<Local> {
     #[must_use]

@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use derivative::Derivative;
 use rusqlite::params;
 use snafu::{Backtrace, ResultExt, Snafu};
 
@@ -12,8 +11,7 @@ use crate::DateTime;
 
 use super::{CloudProvider, Key};
 
-#[derive(Derivative, Snafu)]
-#[derivative(Debug)]
+#[derive(Snafu)]
 pub enum Error<C: CloudProvider> {
     SqliteFailed {
         source: rusqlite::Error,
@@ -23,6 +21,23 @@ pub enum Error<C: CloudProvider> {
         source: C::Error,
         backtrace: Backtrace,
     },
+}
+
+impl<C: CloudProvider> std::fmt::Debug for Error<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SqliteFailed { source, backtrace } => f
+                .debug_struct("SqliteFailed")
+                .field("source", source)
+                .field("backtrace", backtrace)
+                .finish(),
+            Self::CloudFailed { source, backtrace } => f
+                .debug_struct("CloudFailed")
+                .field("source", source)
+                .field("backtrace", backtrace)
+                .finish(),
+        }
+    }
 }
 
 /// Stores state of remote cloud provider.

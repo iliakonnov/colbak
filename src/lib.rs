@@ -5,6 +5,7 @@
     generic_associated_types,
     map_first_last,
     never_type,
+    once_cell,
     type_alias_impl_trait,
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]

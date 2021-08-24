@@ -50,3 +50,9 @@ pub trait Utils: Sized {
 }
 
 impl<T> Utils for T {}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
+}

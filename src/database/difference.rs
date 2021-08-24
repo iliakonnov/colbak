@@ -15,7 +15,7 @@ use super::{error::*, RowId};
 /// It looks like bitflag, but it is not.
 /// Each row in database may have only one of these bits set.
 /// Making an bitflag allows to filter rows much more easily and efficient.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, num_enum::TryFromPrimitive)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum DiffType {
     /// File deleted
@@ -33,8 +33,25 @@ pub enum DiffType {
 }
 
 impl DiffType {
-    fn parse(num: u8) -> Option<DiffType> {
-        num.try_into().ok()
+    /// Converts given number to the variant of the enum.
+    /// 
+    /// ```
+    /// # use colbak_lib::database::DiffType;
+    /// assert_eq!(DiffType::parse(DiffType::Deleted as u8), Some(DiffType::Deleted));
+    /// assert_eq!(DiffType::parse(DiffType::Created as u8), Some(DiffType::Created));
+    /// assert_eq!(DiffType::parse(DiffType::Changed as u8), Some(DiffType::Changed));
+    /// ```
+    #[must_use]
+    pub fn parse(num: u8) -> Option<DiffType> {
+        const DELETED: u8 = DiffType::Deleted as u8;
+        const CREATED: u8 = DiffType::Created as u8;
+        const CHANGED: u8 = DiffType::Changed as u8;
+        match num {
+            DELETED => Some(DiffType::Deleted),
+            CREATED => Some(DiffType::Created),
+            CHANGED => Some(DiffType::Changed),
+            _ => None
+        }
     }
 }
 
