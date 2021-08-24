@@ -29,8 +29,16 @@ impl<R, D: digest::Digest> StreamHash<R, D> {
         }
     }
 
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
+
     pub fn finalize(self) -> digest::Output<D> {
         self.digest.finalize()
+    }
+
+    pub fn done(self) -> (R, digest::Output<D>) {
+        (self.inner, self.digest.finalize())
     }
 }
 
@@ -85,5 +93,41 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Result<(), std::io::Error>> {
         self.project().inner.poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // echo -ne "data" | sha256sum
+    const DATA: &[u8] = b"data";
+    const EXPECTED: &[u8] =
+        &hex_literal::hex!("3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7");
+
+    #[tokio::test]
+    async fn reading() {
+        let reader = std::io::Cursor::new(DATA);
+        let mut stream = stream_hash(reader);
+
+        let mut buf = [0; 1024];
+        let len = stream.read(&mut buf[..]).await.unwrap();
+        assert_eq!(&buf[..len], DATA);
+
+        let computed = stream.finalize();
+        assert_eq!(&computed[..], EXPECTED);
+    }
+
+    #[tokio::test]
+    async fn writing() {
+        let writer = Vec::new();
+        let mut stream = stream_hash(writer);
+
+        stream.write_all(&DATA).await.unwrap();
+        let (buf, computed) = stream.done();
+        assert_eq!(&buf[..], DATA);
+        assert_eq!(&computed[..], EXPECTED);
     }
 }
