@@ -71,6 +71,24 @@ impl DiffRow {
             DiffRow::Changed { .. } => DiffType::Changed,
         }
     }
+
+    #[must_use]
+    pub fn path(&self) -> &EncodedPath<External> {
+        match self {
+            DiffRow::Deleted { path, .. } => path,
+            DiffRow::Created { path, .. } => path,
+            DiffRow::Changed { path, .. } => path,
+        }
+    }
+
+    #[must_use]
+    pub fn rowid(&self) -> RowId {
+        match self {
+            DiffRow::Deleted { rowid, .. } => *rowid,
+            DiffRow::Created { rowid, .. } => *rowid,
+            DiffRow::Changed { rowid, .. } => *rowid,
+        }
+    }
 }
 
 /// Difference between two snapshots.
@@ -201,7 +219,7 @@ pub struct DiffQuery<'a> {
 
 impl<'a> DiffQuery<'a> {
     /// Loads information about the file from snapshot named `name`.
-    /// 
+    ///
     /// Returns `None` iff `id` is `None`.
     fn load_info(
         &'a self,
@@ -248,12 +266,81 @@ impl<'a> DiffQuery<'a> {
         Ok(statement)
     }
 
+    /// Returns matching `DiffRow`, if exists
+    pub fn by_rowid(&'a self, row: RowId) -> Result<Option<DiffRow>, Error> {
+        use rusqlite::OptionalExtension;
+        let name = &self.diff.name;
+        let json: Option<Result<DiffRow, Error>> = self
+            .diff
+            .db
+            .conn
+            .query_row(
+                &fmt_sql!(
+                    "SELECT type, before, after, size, path, ROWID
+                    FROM {name}.diff WHERE ROWID=?"
+                ),
+                params![row.0],
+                |row| Ok(self.parse_row(row)),
+            )
+            .optional()
+            .context(SqliteFailed)?;
+        let res = match json {
+            Some(res) => Some(res?),
+            None => None,
+        };
+        Ok(res)
+    }
+
     /// Returns count of matching rows
     pub fn count(&'a self) -> Result<u64, Error> {
         let mut statement = self.select("COUNT(*)")?;
         statement
             .query_row(params![], |x| x.get(0))
             .context(SqliteFailed)
+    }
+
+    /// Parses row returned by following SQL statement:
+    /// ```sql
+    /// SELECT type, before, after, size, path, ROWID
+    /// FROM {self.diff.name}.diff
+    /// ```
+    fn parse_row(&self, row: &rusqlite::Row) -> Result<DiffRow, Error> {
+        let kind: u8 = row.get(0).context(SqliteFailed)?;
+        let before: Option<u64> = row.get(1).context(SqliteFailed)?;
+        let after: Option<u64> = row.get(2).context(SqliteFailed)?;
+        let size: u64 = row.get(3).context(SqliteFailed)?;
+        let path: Vec<u8> = row.get(4).context(SqliteFailed)?;
+        let rowid = row.get(5).context(SqliteFailed)?;
+
+        let kind = DiffType::parse(kind).context(WrongDiffType { found: kind })?;
+        // FIXME: This is not fast at all.
+        let before = self.load_info(self.diff.before_snap, before)?;
+        let after = self.load_info(self.diff.after_snap, after)?;
+        let path = EncodedPath::from_vec(path);
+        let rowid = RowId(rowid);
+
+        let row = match kind {
+            DiffType::Deleted => DiffRow::Deleted {
+                rowid,
+                path,
+                size,
+                before: before.context(InvalidDiffRow)?,
+            },
+            DiffType::Created => DiffRow::Created {
+                rowid,
+                path,
+                size,
+                after: after.context(InvalidDiffRow)?,
+            },
+            DiffType::Changed => DiffRow::Changed {
+                rowid,
+                path,
+                size,
+                before: before.context(InvalidDiffRow)?,
+                after: after.context(InvalidDiffRow)?,
+            },
+        };
+        Ok(row)
     }
 
     /// Applies function to each matching row
@@ -265,42 +352,7 @@ impl<'a> DiffQuery<'a> {
 
         let mut rows = statement.query(params![]).context(SqliteFailed)?;
         while let Some(row) = rows.next().context(SqliteFailed)? {
-            let kind: u8 = row.get(0).context(SqliteFailed)?;
-            let before: Option<u64> = row.get(1).context(SqliteFailed)?;
-            let after: Option<u64> = row.get(2).context(SqliteFailed)?;
-            let size: u64 = row.get(3).context(SqliteFailed)?;
-            let path: Vec<u8> = row.get(4).context(SqliteFailed)?;
-            let rowid = row.get(5).context(SqliteFailed)?;
-
-            let kind = DiffType::parse(kind).context(WrongDiffType { found: kind })?;
-            // FIXME: This is not fast at all.
-            let before = self.load_info(self.diff.before_snap, before)?;
-            let after = self.load_info(self.diff.after_snap, after)?;
-            let path = EncodedPath::from_vec(path);
-            let rowid = RowId(rowid);
-
-            let row = match kind {
-                DiffType::Deleted => DiffRow::Deleted {
-                    rowid,
-                    path,
-                    size,
-                    before: before.context(InvalidDiffRow)?,
-                },
-                DiffType::Created => DiffRow::Created {
-                    rowid,
-                    path,
-                    size,
-                    after: after.context(InvalidDiffRow)?,
-                },
-                DiffType::Changed => DiffRow::Changed {
-                    rowid,
-                    path,
-                    size,
-                    before: before.context(InvalidDiffRow)?,
-                    after: after.context(InvalidDiffRow)?,
-                },
-            };
-
+            let row = self.parse_row(row)?;
             match func(row) {
                 Ok(_) => {}
                 res @ Err(_) => return Ok(res),

@@ -65,8 +65,69 @@ impl Database {
         self.conn
             .execute(&self.attach(&name)?, params![])
             .context(SqliteFailed)?;
-        // FIXME: We should check is snapshot exists.
-        Ok(Snapshot { db: self, name })
+        if self.is_snapshot_exists(&name)? {
+            Ok(Snapshot { db: self, name })
+        } else {
+            NoSnapshotExists { name }.fail()
+        }
+    }
+
+    /// Checks is snapshot exists.
+    fn is_snapshot_exists(&self, name: &SqlName) -> Result<bool, Error> {
+        let rows = self
+            .conn
+            .query_row(
+                &fmt_sql!(
+                    "SELECT COUNT(*) FROM {name}.sqlite_master
+                    WHERE type='table' AND name='snap'",
+                ),
+                params![],
+                |row| row.get::<_, u64>(0),
+            )
+            .context(SqliteFailed)?;
+        Ok(rows != 0)
+    }
+
+    /// Attaches database and creates tables if needed.
+    /// Returns true when new snapshot was created.
+    fn init_snapshot(&self, name: &SqlName) -> Result<bool, Error> {
+        // Attach database:
+        self.conn
+            .execute(&self.attach(name)?, params![])
+            .context(SqliteFailed)?;
+        // Maybe it was already initialized
+        if self.is_snapshot_exists(name)? {
+            return Ok(false);
+        }
+        // Ok, let's initialize it then
+        let txn = self.conn.unchecked_transaction().context(SqliteFailed)?;
+        let first_id = generate_id(self.snapshot_count as _, 0)?;
+        txn.execute_batch(&fmt_sql!(
+            "
+                CREATE TABLE {name}.snap (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    path STRING,
+                    size INTEGER,
+                    identifier BLOB,   /* binary data */
+                    info TEXT          /* json */
+                );
+                INSERT INTO {name}.snap(id) VALUES ({first_id});
+                DELETE FROM {name}.snap WHERE id={first_id};
+            "
+        ))
+        .context(SqliteFailed)?;
+        txn.execute(
+            fmt_sql!(static
+                "INSERT INTO snapshots(name, created_at, filled_at) VALUES (:name, :created_at, 0)"
+            ),
+            named_params![
+                ":name": name.0,
+                ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+            ],
+        )
+        .context(SqliteFailed)?;
+        txn.commit().context(SqliteFailed)?;
+        Ok(true)
     }
 
     // FIXME: Refactor to return `SnapshotFiller` instead. `Snapshot` should be read only.
@@ -76,52 +137,18 @@ impl Database {
     ///
     /// [`readonly_snapshot`]: Self::readonly_snapshot
     pub fn open_snapshot(&mut self, name: SqlName) -> Result<Snapshot<&mut Database>, Error> {
-        // Attach database:
-        self.conn
-            .execute(&self.attach(&name)?, params![])
-            .context(SqliteFailed)?;
-        // Maybe we should create a table then.
-        let is_exists = self
-            .conn
-            .execute(
-                &fmt_sql!(
-                    "SELECT name FROM {name}.sqlite_master
-                    WHERE type='table' AND name='snap'",
-                ),
-                params![],
-            )
-            .context(SqliteFailed)?;
-        if is_exists == 0 {
-            // Ok, let's initialize it then
-            let txn = self.conn.unchecked_transaction().context(SqliteFailed)?;
-            let first_id = generate_id(self.snapshot_count as _, 0)?;
-            txn.execute_batch(&fmt_sql!(
-                "
-                    CREATE TABLE {name}.snap (
-                        id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                        path STRING,
-                        size INTEGER,
-                        identifier BLOB,   /* binary data */
-                        info TEXT          /* json */
-                    );
-                    INSERT INTO {name}.snap(id) VALUES ({first_id});
-                    DELETE FROM {name}.snap WHERE id={first_id};
-                "
-            ))
-            .context(SqliteFailed)?;
-            txn.execute(
-                fmt_sql!(static
-                    "INSERT INTO snapshots(name, created_at, filled_at) VALUES (:name, :created_at, 0)"
-                ),
-                named_params![
-                    ":name": name.0,
-                    ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
-                ],
-            )
-            .context(SqliteFailed)?;
-            txn.commit().context(SqliteFailed)?;
+        if self.init_snapshot(&name)? {
             self.snapshot_count += 1;
         }
+        Ok(Snapshot { db: self, name })
+    }
+
+    /// Returns empty snapshot. Mostly useful for debugging purposes only.
+    pub fn empty_snapshot(&self) -> Result<Snapshot<&Database>, Error> {
+        // UNWRAP: `empty_snap` is correct sql name.
+        #[allow(clippy::unwrap_used)]
+        let name = SqlName::new("empty_snap".to_string()).unwrap();
+        self.init_snapshot(&name)?;
         Ok(Snapshot { db: self, name })
     }
 

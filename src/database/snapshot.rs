@@ -23,7 +23,7 @@ pub struct Snapshot<D: Borrow<Database>> {
 }
 
 /// Simple struct that allows filling snapshot with files.
-/// 
+///
 /// Note that if [`save()`](Self::save) is not called, transaction will be rolled back.
 #[must_use]
 pub struct SnapshotFiller<'a> {
@@ -98,6 +98,16 @@ impl<'a> SnapshotFiller<'a> {
     }
 }
 
+impl<'a> Snapshot<&'a mut Database> {
+    /// Converts RW-snapshot to RO.
+    /// Unfortunately, this does not help to reborrow Database as immutable.
+    #[must_use]
+    pub fn readonly(self) -> Snapshot<&'a Database> {
+        let (db, name) = self.destruct();
+        Snapshot { db, name }
+    }
+}
+
 impl<'a, D: BorrowMut<Database>> Snapshot<D> {
     pub fn filler(&mut self) -> Result<SnapshotFiller, Error> {
         SnapshotFiller::new(self)
@@ -108,13 +118,34 @@ impl<'a, D: Borrow<Database>> Snapshot<D> {
     pub fn name(&self) -> &SqlName {
         &self.name
     }
+
+    pub fn into_name(self) -> SqlName {
+        let (db, name) = self.destruct();
+        Self::detach(db.borrow(), &name);
+        name
+    }
+
+    /// Destructs snapshot without dropping
+    fn destruct(self) -> (D, SqlName) {
+        let no_drop = std::mem::ManuallyDrop::new(self);
+        unsafe {
+            // Unsafe goes brrrr
+            let db = std::ptr::read(&no_drop.db);
+            let name = std::ptr::read(&no_drop.name);
+            (db, name)
+        }
+    }
+
+    /// Detaches snapshot. Must be used extremely carefully, since it is also called in drop
+    fn detach(db: &Database, name: &SqlName) {
+        let _unused_result = db
+            .conn
+            .execute(&fmt_sql!("DETACH DATABASE {0}", name), params![]);
+    }
 }
 
 impl<'a, D: Borrow<Database>> Drop for Snapshot<D> {
     fn drop(&mut self) {
-        let db: &Database = self.db.borrow();
-        let _unused_result = db
-            .conn
-            .execute(&fmt_sql!("DETACH DATABASE {0}", self.name), params![]);
+        Self::detach(self.db.borrow(), &self.name);
     }
 }

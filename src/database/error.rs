@@ -25,6 +25,10 @@ pub enum Error {
         str: std::ffi::OsString,
         backtrace: snafu::Backtrace,
     },
+    #[snafu(display("No snapshot with name `{}` can be found", name))]
+    NoSnapshotExists {
+        name: SqlName,
+    },
     TooManySnapshots,
     TooManyRows,
     WrongDiffType {

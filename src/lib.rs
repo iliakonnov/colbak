@@ -6,7 +6,8 @@
     exhaustive_patterns,
     try_blocks,
     format_args_capture,
-    backtrace
+    backtrace,
+    map_first_last,
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![warn(clippy::pedantic, clippy::cargo)]
@@ -39,7 +40,7 @@ pub use time::OffsetDateTime as DateTime;
 pub mod logging;
 
 #[macro_use]
-pub mod sql;
+pub mod utils;
 
 pub mod cloud;
 pub mod cpio;

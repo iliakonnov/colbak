@@ -4,7 +4,7 @@ use colbak_lib::cpio::reader::NextItem;
 use colbak_lib::cpio::Archive;
 use colbak_lib::database::{Database, SqlName};
 use colbak_lib::fileinfo::{Info, UnspecifiedInfo};
-use colbak_lib::path::Local;
+use colbak_lib::path::{EscapedString, Local};
 use colbak_lib::stream_hash::stream_hash;
 use colbak_lib::types::Checksum;
 use std::convert::Infallible;
@@ -31,7 +31,17 @@ enum Opt {
     /// Creates a snapshot of specified directory
     CreateSnapshot { database: PathBuf, root: PathBuf },
     /// Computes difference between snapshots
-    DiffSnapshot { database: PathBuf, before: String, after: String },
+    DiffSnapshot {
+        database: PathBuf,
+        before: String,
+        after: String,
+    },
+    /// Previews how directory will be grouped into packs
+    PreviewPacks {
+        database: PathBuf,
+        directory: PathBuf,
+        min_size: u64,
+    },
 }
 
 async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
@@ -146,8 +156,12 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
             snapshot.filler()?.fill(&root)?.save()?;
             println!("Created snapshot {}", snapshot.name());
             Ok(())
-        },
-        Opt::DiffSnapshot { database, before, after } => {
+        }
+        Opt::DiffSnapshot {
+            database,
+            before,
+            after,
+        } => {
             let database = Database::open(database)?;
             let before = database.readonly_snapshot(SqlName::new(before)?)?;
             let after = database.readonly_snapshot(SqlName::new(after)?)?;
@@ -156,6 +170,36 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
                 println!("{:#?}", row);
                 Ok(())
             })??;
+            Ok(())
+        }
+        Opt::PreviewPacks {
+            database,
+            directory,
+            min_size,
+        } => {
+            let mut database = Database::open(database)?;
+
+            let after = {
+                let mut after = database.open_snapshot(SqlName::now())?;
+                after.filler()?.fill(&directory)?.save()?;
+                after.into_name()
+            };
+            let after = database.readonly_snapshot(after)?;
+
+            let before = database.empty_snapshot()?;
+            let diff = database.compare_snapshots(&before, &after)?;
+
+            let packed = colbak_lib::packer::pack(&diff, min_size)?;
+            for (n, pack) in packed.0.iter().enumerate() {
+                println!("PACK {}:", n + 1);
+                for file in pack {
+                    let file = diff
+                        .query()
+                        .by_rowid(*file)?
+                        .map(|row| row.path().escaped().into_owned());
+                    println!("    {:?}", file);
+                }
+            }
             Ok(())
         }
     }
