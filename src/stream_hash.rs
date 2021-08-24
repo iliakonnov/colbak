@@ -98,6 +98,7 @@ where
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::semicolon_if_nothing_returned)] // Waiting for https://github.com/rust-lang/rust-clippy/issues/7438
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -125,7 +126,7 @@ mod tests {
         let writer = Vec::new();
         let mut stream = stream_hash(writer);
 
-        stream.write_all(&DATA).await.unwrap();
+        stream.write_all(DATA).await.unwrap();
         let (buf, computed) = stream.done();
         assert_eq!(&buf[..], DATA);
         assert_eq!(&computed[..], EXPECTED);

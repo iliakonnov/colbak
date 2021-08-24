@@ -5,6 +5,7 @@ use rusqlite::{named_params, params};
 use snafu::ResultExt;
 
 use crate::database::generate_id;
+use crate::utils::Utils;
 
 use super::difference::Diff;
 use super::snapshot::Snapshot;
@@ -122,7 +123,7 @@ impl Database {
             ),
             named_params![
                 ":name": name.0,
-                ":created_at": time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+                ":created_at": time::OffsetDateTime::now_utc().format_rfc3339(),
             ],
         )
         .context(SqliteFailed)?;

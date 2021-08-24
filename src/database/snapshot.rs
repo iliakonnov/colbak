@@ -9,6 +9,7 @@ use snafu::ResultExt;
 use crate::fileinfo::FileIdentifier;
 use crate::fileinfo::Info;
 use crate::path::EncodedPath;
+use crate::utils::Utils;
 
 use super::error::*;
 use super::index::Database;
@@ -76,7 +77,7 @@ impl<'a> SnapshotFiller<'a> {
             .execute(
                 "UPDATE snapshots SET filled_at=? WHERE name=?",
                 params![
-                    time::OffsetDateTime::now_utc().format(time::Format::Rfc3339),
+                    time::OffsetDateTime::now_utc().format_rfc3339(),
                     self.snap_name.as_str()
                 ],
             )

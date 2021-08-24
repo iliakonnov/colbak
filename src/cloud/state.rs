@@ -6,6 +6,7 @@ use snafu::{Backtrace, ResultExt, Snafu};
 use crate::fileinfo::Info;
 use crate::path::External;
 use crate::DateTime;
+use crate::utils::Utils;
 
 use super::Key;
 
@@ -52,7 +53,7 @@ impl State {
     /// Puts information about uploaded archive to the database.
     pub fn set_uploaded(&mut self, archive: UploadedArchive) -> Result<(), Error> {
         let txn = self.db.transaction().context(SqliteFailed)?;
-        let uploaded_at = archive.uploaded_at.format(time::Format::Rfc3339);
+        let uploaded_at = archive.uploaded_at.format_rfc3339();
         txn.execute(
             "INSERT INTO archives(key, uploaded_at) VALUES (?, ?)",
             params![archive.key.0, uploaded_at],

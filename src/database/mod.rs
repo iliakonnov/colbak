@@ -51,10 +51,15 @@ impl SqlName {
     /// Creates name with current date and time
     #[must_use]
     pub fn now() -> SqlName {
-        let name = time::OffsetDateTime::now_utc().format("at%Y_%m_%d_%H_%M_%S_%N");
+        let format = time::macros::format_description!(
+            "at[year]_[month]_[day]_[hour]_[minute]_[second]_[subsecond]"
+        );
+
+        let name = time::OffsetDateTime::now_utc().format(&format);
+        // PANIC: formatting cannot fail when running this program at present times.
         // PANIC: name is completely correct, so it's safe to unwrap here.
         #[allow(clippy::unwrap_used)]
-        SqlName::new(name).unwrap()
+        SqlName::new(name.unwrap()).unwrap()
     }
 
     #[must_use]

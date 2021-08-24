@@ -260,14 +260,22 @@ impl CpioHeader {
             0o0040000 => UnspecifiedInfo::Dir(DirInfo {}),
             _ => UnspecifiedInfo::Unknown(UnknownInfo {}),
         };
+
+        #[allow(clippy::unwrap_used)]
+        let (created_at, modified_at) = (
+            DateTime::from_unix_timestamp(0).unwrap(),
+            // UNWRAP: Any u32 timestamp can be safely converted
+            DateTime::from_unix_timestamp(decode_u32(self.mtime).into()).unwrap(),
+        );
+
         Info {
             path: EncodedPath::from_vec(name.to_vec()),
             inode: decode_u32(self.dev_ino).into(),
             mode: mode.into(),
             user_id: self.uid.into(),
             group_id: self.gid.into(),
-            created_at: DateTime::from_unix_timestamp(0),
-            modified_at: DateTime::from_unix_timestamp(decode_u32(self.mtime).into()),
+            created_at,
+            modified_at,
             hash: None,
             data,
         }

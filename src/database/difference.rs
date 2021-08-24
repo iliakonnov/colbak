@@ -34,7 +34,6 @@ pub enum DiffType {
 
 impl DiffType {
     fn parse(num: u8) -> Option<DiffType> {
-        use std::convert::TryInto;
         num.try_into().ok()
     }
 }

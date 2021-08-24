@@ -85,7 +85,7 @@ impl FileIdentifier {
 
 impl<K: PathKind> Info<K, UnspecifiedInfo> {
     /// Creates identifier from Info, when possible.
-    /// 
+    ///
     /// It is currently possible only if Info stores information about the file,
     /// not a directory or something else.
     #[must_use]
@@ -178,33 +178,30 @@ conversion!(using File (into_file) from FileInfo);
 conversion!(using Unknown (into_unknown) from UnknownInfo);
 
 /// Converts `SystemTime` to normal `DateTime`, falling back to
-/// `-100000` year when provided with Err variant (minumum supported date by `time` crate).
-/// 
+/// `-9999` year when provided with Err variant (minumum supported date by `time` crate).
+///
 /// # Examples
-/// 
+///
 /// `std::time::SystemTime::UNIX_EPOCH`
 /// ```
 /// # use colbak_lib::fileinfo::systime_to_datetime;
 /// # use std::time::SystemTime;
-/// # use time::{PrimitiveDateTime, date, time};
+/// # use time::{PrimitiveDateTime, macros::{date, time}};
 /// let datetime = systime_to_datetime::<()>(Ok(SystemTime::UNIX_EPOCH));
 /// assert_eq!(datetime, PrimitiveDateTime::new(date!(1970-01-01), time!(00:00:00)).assume_utc());
 /// ```
-/// 
+///
 /// `Err` variant:
 /// ```
 /// # use colbak_lib::fileinfo::systime_to_datetime;
-/// # use time::{PrimitiveDateTime, date, time};
+/// # use time::{PrimitiveDateTime, macros::{date, time}};
 /// let datetime = systime_to_datetime(Err("something went very wrong"));
-/// assert_eq!(datetime, PrimitiveDateTime::new(date!(-100000-01-01), time!(00:00:00)).assume_utc());
+/// assert_eq!(datetime, PrimitiveDateTime::new(date!(-9999-01-01), time!(00:00:00)).assume_utc());
 /// ```
 #[allow(clippy::needless_pass_by_value)] // False-positive
 pub fn systime_to_datetime<E>(x: Result<SystemTime, E>) -> DateTime {
-    // Minimum timestamp possible is -3217862419200
-    x.map_or_else(
-        |_| DateTime::from_unix_timestamp(-3217862419200),
-        DateTime::from,
-    )
+    const MIN: DateTime = time::Date::MIN.midnight().assume_utc();
+    x.map_or_else(|_| MIN, DateTime::from)
 }
 
 /// Extracts specific information about the file from metadata given by OS.
