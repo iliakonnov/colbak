@@ -206,7 +206,7 @@ async fn entry_point(opt: Opt) -> Result<(), Box<dyn StdError>> {
 }
 
 fn show_bt(err: &dyn StdError) {
-    println!("# {}", err);
+    eprintln!("# {}", err);
     match err.backtrace() {
         Some(trace) => eprintln!("{}", trace),
         None => eprintln!("\nTrace missing :("),

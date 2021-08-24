@@ -89,6 +89,15 @@ impl DiffRow {
             DiffRow::Changed { rowid, .. } => *rowid,
         }
     }
+
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        match self {
+            DiffRow::Deleted { size, .. } => *size,
+            DiffRow::Created { size, .. } => *size,
+            DiffRow::Changed { size, .. } => *size,
+        }
+    }
 }
 
 /// Difference between two snapshots.
@@ -245,7 +254,7 @@ impl<'a> DiffQuery<'a> {
     }
 
     /// Selects provided columns with correct filters.
-    fn select(&'a self, select: &str) -> Result<rusqlite::Statement, Error> {
+    fn select(&'a self, select: &str, order: &str) -> Result<rusqlite::Statement, Error> {
         let name = &self.diff.name;
         let type_filter = self.enabled_kinds;
         let min_size = self.allowed_sizes.start();
@@ -260,6 +269,7 @@ impl<'a> DiffQuery<'a> {
                 FROM {name}.diff
                 WHERE (type & {type_filter}) != 0
                 AND {min_size} <= size AND size <= {max_size}
+                {order}
                 "#
             ))
             .context(SqliteFailed)?;
@@ -293,7 +303,7 @@ impl<'a> DiffQuery<'a> {
 
     /// Returns count of matching rows
     pub fn count(&'a self) -> Result<u64, Error> {
-        let mut statement = self.select("COUNT(*)")?;
+        let mut statement = self.select("COUNT(*)", "")?;
         statement
             .query_row(params![], |x| x.get(0))
             .context(SqliteFailed)
@@ -343,12 +353,16 @@ impl<'a> DiffQuery<'a> {
         Ok(row)
     }
 
-    /// Applies function to each matching row
+    /// Applies function to each matching row.
+    /// Files guaranteed to be sorted by size in ascending order
     pub fn for_each<F, E>(&'a self, mut func: F) -> Result<Result<(), E>, Error>
     where
         F: FnMut(DiffRow) -> Result<(), E>,
     {
-        let mut statement = self.select("type, before, after, size, path, ROWID")?;
+        let mut statement = self.select(
+            "type, before, after, size, path, ROWID",
+            "ORDER BY size ASC",
+        )?;
 
         let mut rows = statement.query(params![]).context(SqliteFailed)?;
         while let Some(row) = rows.next().context(SqliteFailed)? {

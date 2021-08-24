@@ -8,6 +8,8 @@
     format_args_capture,
     backtrace,
     map_first_last,
+    generators,
+    generator_trait,
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![warn(clippy::pedantic, clippy::cargo)]
