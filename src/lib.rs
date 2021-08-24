@@ -1,16 +1,11 @@
 #![feature(
-    generic_associated_types,
-    type_alias_impl_trait,
-    trait_alias,
-    type_ascription,
-    never_type,
-    exhaustive_patterns,
-    try_blocks,
-    format_args_capture,
     backtrace,
+    exhaustive_patterns,
+    format_args_capture,
+    generic_associated_types,
     map_first_last,
-    generators,
-    generator_trait,
+    never_type,
+    type_alias_impl_trait,
 )]
 #![cfg_attr(windows, feature(windows_by_handle))]
 #![warn(clippy::pedantic, clippy::cargo)]
