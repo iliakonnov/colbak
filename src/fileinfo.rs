@@ -83,7 +83,7 @@ impl FileIdentifier {
     }
 }
 
-impl<K: PathKind> Info<K, UnspecifiedInfo> {
+impl<P: PathKind> Info<P, UnspecifiedInfo> {
     /// Creates identifier from Info, when possible.
     ///
     /// It is currently possible only if Info stores information about the file,
@@ -98,7 +98,7 @@ impl<K: PathKind> Info<K, UnspecifiedInfo> {
     }
 }
 
-impl<K: PathKind> Info<K, FileInfo> {
+impl<P: PathKind> Info<P, FileInfo> {
     /// Creates identifier from file-related Info.
     #[must_use]
     pub fn identifier(&self) -> FileIdentifier {
@@ -131,6 +131,25 @@ impl<P: PathKind> Info<P, UnspecifiedInfo> {
             UnspecifiedInfo::File(_) => InfoKind::File(self.into_file().unwrap()),
             UnspecifiedInfo::Dir(_) => InfoKind::Dir(self.into_dir().unwrap()),
             UnspecifiedInfo::Unknown(_) => InfoKind::Unknown(self.into_unknown().unwrap()),
+        }
+    }
+}
+
+impl<P: PathKind, K> Info<P, K> {
+    /// Changes kind of underlying path. Use with caution.
+    ///
+    /// See also: [`Path::cast`]
+    pub fn cast<T: PathKind>(self) -> Info<T, K> {
+        Info {
+            path: self.path.cast(),
+            inode: self.inode,
+            mode: self.mode,
+            user_id: self.user_id,
+            group_id: self.group_id,
+            created_at: self.created_at,
+            modified_at: self.modified_at,
+            hash: self.hash,
+            data: self.data,
         }
     }
 }
