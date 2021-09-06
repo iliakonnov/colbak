@@ -35,5 +35,11 @@ time = { version = "0.3.1", default-features = false, features = ["std", "serde"
 tokio = { version = "1.10.1", features = ["rt-multi-thread", "fs", "io-std", "io-util", "macros"] }
 walkdir = "2.3.2"
 
+uuid = { version = "0.8.2", features = ["v4"], optional = true }
+
+[features]
+default = ["local-fs"]
+local-fs = ["uuid"]
+
 [dev-dependencies]
 hex-literal = "0.3.3"

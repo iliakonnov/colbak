@@ -9,7 +9,7 @@ use crate::path::{External, Local};
 use crate::utils::Utils;
 use crate::DateTime;
 
-use super::{CloudProvider, Key};
+use super::{CloudProvider, FakeCloud, Key};
 
 #[derive(Snafu)]
 pub enum Error<C: CloudProvider> {
@@ -56,11 +56,11 @@ impl<C: CloudProvider> State<C> {
     pub fn fake<P: AsRef<Path>>(
         path: P,
     ) -> Result<State<super::FakeCloud>, Error<super::FakeCloud>> {
-        State::open(path)
+        State::open(path, FakeCloud)
     }
 
     /// Opens database file at specified path.
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error<C>> {
+    pub fn open<P: AsRef<Path>>(path: P, cloud: C) -> Result<Self, Error<C>> {
         let db = rusqlite::Connection::open(path).context(SqliteFailed)?;
         db.execute_batch(
             r#"
@@ -76,7 +76,6 @@ impl<C: CloudProvider> State<C> {
             "#,
         )
         .context(SqliteFailed)?;
-        let cloud = C::new();
         Ok(State { db, cloud })
     }
 
