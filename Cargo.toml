@@ -19,20 +19,20 @@ path = "src/main.rs"
 
 [dependencies]
 base64 = "0.13.0"
-digest = "0.9.0"
-fs2 = "0.4.3"  # Used once for lock_exclusive
-futures = "0.3.16"
-os_str_bytes = "4.0.0"
+digest = "0.10.1"
+fs2 = "0.4.3"
+futures = "0.3.19"
+os_str_bytes = "6.0.0"
 pin-project-lite = "0.2.7"
-rusqlite = "0.25.3"
-serde = { version = "1.0.129", features = [ "derive" ] }
-serde_json = "1.0.66"
-sha2 = "0.9.5"
-smallvec = "1.6.1"  # Used once in packer
+rusqlite = "0.26.3"
+serde = { version = "1.0.132", features = [ "derive" ] }
+serde_json = "1.0.73"
+sha2 = "0.10.0"
+smallvec = "1.7.0"
 snafu = { version = "0.6.10", default-features = false, features = ["std", "unstable-backtraces-impl-std"] }
-structopt = "0.3.22"
-time = { version = "0.3.1", default-features = false, features = ["std", "serde", "formatting", "macros"] }
-tokio = { version = "1.10.1", features = ["rt-multi-thread", "fs", "io-std", "io-util", "macros"] }
+structopt = "0.3.25"
+time = { version = "0.3.5", default-features = false, features = ["std", "serde", "formatting", "macros"] }
+tokio = { version = "1.15.0", features = ["rt-multi-thread", "fs", "io-std", "io-util", "macros"] }
 walkdir = "2.3.2"
 
 uuid = { version = "0.8.2", features = ["v4"], optional = true }
@@ -42,4 +42,4 @@ default = ["local-fs"]
 local-fs = ["uuid"]
 
 [dev-dependencies]
-hex-literal = "0.3.3"
+hex-literal = "0.3.4"

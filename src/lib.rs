@@ -1,4 +1,5 @@
 #![feature(
+    arbitrary_enum_discriminant,
     backtrace,
     exhaustive_patterns,
     format_args_capture,

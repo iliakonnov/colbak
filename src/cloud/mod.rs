@@ -10,14 +10,14 @@ pub struct Key(pub String);
 pub trait CloudProvider {
     type Error: std::fmt::Debug + std::error::Error + 'static;
 
-    type UploadFuture<'a, A: 'a>: 'a + Future<Output = Result<Key, Self::Error>>;
+    type UploadFuture<'a, A: 'a>: 'a + Future<Output = Result<Key, Self::Error>> where Self: 'a;
     fn upload<'a, A: AsyncRead + Unpin + 'a>(&'a self, archive: A) -> Self::UploadFuture<'a, A>;
 
-    type DeleteFuture<'a>: 'a + Future<Output = Result<(), Self::Error>>;
+    type DeleteFuture<'a>: 'a + Future<Output = Result<(), Self::Error>> where Self: 'a;
     fn delete(&self, key: Key) -> Self::DeleteFuture<'_>;
 
     type DownloadReader<'a>: 'a + AsyncRead;
-    type DownloadFuture<'a>: 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>;
+    type DownloadFuture<'a>: 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>> where Self: 'a;
     fn download(&self, key: Key) -> Self::DownloadFuture<'_>;
 }
 
