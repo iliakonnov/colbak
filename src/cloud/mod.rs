@@ -20,6 +20,8 @@ pub trait CloudProvider {
     fn delete<'a>(&'a self, key: Key) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>>;
 
     type DownloadReader<'a>: 'a + AsyncRead where Self: 'a;
+
+    #[allow(clippy::type_complexity)]
     fn download<'a>(
         &'a self,
         key: Key,

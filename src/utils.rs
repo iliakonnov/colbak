@@ -16,6 +16,7 @@ pub trait Utils: Sized {
         func(self)
     }
 
+    #[allow(clippy::return_self_not_must_use)]
     fn also(mut self, func: impl FnOnce(&mut Self)) -> Self {
         func(&mut self);
         self
