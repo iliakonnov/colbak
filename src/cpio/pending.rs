@@ -16,7 +16,7 @@ use tokio::fs::File;
 use tokio::io::AsyncRead;
 
 /// File in archive that is not archived yet.
-/// 
+///
 /// Note: currently only used `P` is [`Local`](Local)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "P:")]

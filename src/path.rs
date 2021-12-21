@@ -204,7 +204,9 @@ impl<K: PathKind> EncodedPath<K> {
 
         let hash: [u8; HASH_LENGTH] = u64_to_ascii(hash);
         let ext_start = self.0.len() - EXTENSION_LENGTH;
-        let dot = self.0.iter()
+        let dot = self
+            .0
+            .iter()
             .enumerate()
             .skip(ext_start)
             .rfind(|(_, &x)| x == b'.')
@@ -245,19 +247,19 @@ impl<T: PathKind> EscapedString for EncodedPath<T> {
 
 impl EscapedString for [u8] {
     /// # Examples
-    /// 
+    ///
     /// Strings are preserved as-is when possible:
     /// ```
     /// # use colbak_lib::path::EscapedString;
     /// assert_eq!(b"Hello world".escaped(), "Hello world");
     /// ```
-    /// 
+    ///
     /// NUL byte don't get escaped, it's a valid character in unicode:
     /// ```
     /// # use colbak_lib::path::EscapedString;
     /// assert_eq!(b"Hello \0 world".escaped(), "Hello \0 world");
     /// ```
-    /// 
+    ///
     /// Some invalid unicode:
     /// ```
     /// # use colbak_lib::path::EscapedString;

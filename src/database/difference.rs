@@ -34,7 +34,7 @@ pub enum DiffType {
 
 impl DiffType {
     /// Converts given number to the variant of the enum.
-    /// 
+    ///
     /// ```
     /// # use colbak_lib::database::DiffType;
     /// assert_eq!(DiffType::parse(DiffType::Deleted as u8), Some(DiffType::Deleted));
@@ -50,7 +50,7 @@ impl DiffType {
             DELETED => Some(DiffType::Deleted),
             CREATED => Some(DiffType::Created),
             CHANGED => Some(DiffType::Changed),
-            _ => None
+            _ => None,
         }
     }
 }

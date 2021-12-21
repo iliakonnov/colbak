@@ -17,9 +17,14 @@ pub trait CloudProvider {
         archive: A,
     ) -> Pin<Box<dyn 'a + Future<Output = Result<Key, Self::Error>>>>;
 
-    fn delete<'a>(&'a self, key: Key) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>>;
+    fn delete<'a>(
+        &'a self,
+        key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>>;
 
-    type DownloadReader<'a>: 'a + AsyncRead where Self: 'a;
+    type DownloadReader<'a>: 'a + AsyncRead
+    where
+        Self: 'a;
 
     #[allow(clippy::type_complexity)]
     fn download<'a>(
@@ -44,7 +49,10 @@ impl CloudProvider for FakeCloud {
         Box::pin(async { Err(FakeDoesNotWork) })
     }
 
-    fn delete<'a>(&'a self, _key: Key) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>> {
+    fn delete<'a>(
+        &'a self,
+        _key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>> {
         Box::pin(async { Err(FakeDoesNotWork) })
     }
 
