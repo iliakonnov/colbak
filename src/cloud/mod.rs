@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use futures::Future;
 use tokio::io::AsyncRead;
 
@@ -10,15 +12,18 @@ pub struct Key(pub String);
 pub trait CloudProvider {
     type Error: std::fmt::Debug + std::error::Error + 'static;
 
-    type UploadFuture<'a, A: 'a>: 'a + Future<Output = Result<Key, Self::Error>> where Self: 'a;
-    fn upload<'a, A: AsyncRead + Unpin + 'a>(&'a self, archive: A) -> Self::UploadFuture<'a, A>;
+    fn upload<'a, A: AsyncRead + Unpin + 'a>(
+        &'a self,
+        archive: A,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Key, Self::Error>>>>;
 
-    type DeleteFuture<'a>: 'a + Future<Output = Result<(), Self::Error>> where Self: 'a;
-    fn delete(&self, key: Key) -> Self::DeleteFuture<'_>;
+    fn delete<'a>(&'a self, key: Key) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>>;
 
-    type DownloadReader<'a>: 'a + AsyncRead;
-    type DownloadFuture<'a>: 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>> where Self: 'a;
-    fn download(&self, key: Key) -> Self::DownloadFuture<'_>;
+    type DownloadReader<'a>: 'a + AsyncRead where Self: 'a;
+    fn download<'a>(
+        &'a self,
+        key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>>>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,20 +35,22 @@ pub struct FakeDoesNotWork;
 impl CloudProvider for FakeCloud {
     type Error = FakeDoesNotWork;
 
-    type UploadFuture<'a, A: 'a> = impl 'a + Future<Output = Result<Key, Self::Error>>;
-    fn upload<'a, A: AsyncRead + Unpin + 'a>(&'a self, _archive: A) -> Self::UploadFuture<'a, A> {
-        async { Err(FakeDoesNotWork) }
+    fn upload<'a, A: AsyncRead + Unpin + 'a>(
+        &'a self,
+        _archive: A,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Key, Self::Error>>>> {
+        Box::pin(async { Err(FakeDoesNotWork) })
     }
 
-    type DeleteFuture<'a> = impl 'a + Future<Output = Result<(), Self::Error>>;
-    fn delete(&self, _key: Key) -> Self::DeleteFuture<'_> {
-        async { Err(FakeDoesNotWork) }
+    fn delete<'a>(&'a self, _key: Key) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>> {
+        Box::pin(async { Err(FakeDoesNotWork) })
     }
 
     type DownloadReader<'a> = impl 'a + AsyncRead;
-    type DownloadFuture<'a> =
-        impl 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>;
-    fn download(&self, _key: Key) -> Self::DownloadFuture<'_> {
-        async { Result::<tokio::io::Empty, _>::Err(FakeDoesNotWork) }
+    fn download<'a>(
+        &'a self,
+        _key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>>> {
+        Box::pin(async { Result::<tokio::io::Empty, _>::Err(FakeDoesNotWork) })
     }
 }

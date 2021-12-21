@@ -2,7 +2,6 @@
     arbitrary_enum_discriminant,
     backtrace,
     exhaustive_patterns,
-    format_args_capture,
     generic_associated_types,
     map_first_last,
     never_type,

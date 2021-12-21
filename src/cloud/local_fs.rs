@@ -1,6 +1,7 @@
 #![cfg(feature = "local-fs")]
 
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use futures::Future;
 use snafu::{ResultExt, Snafu};
@@ -24,13 +25,11 @@ pub enum Error {
 impl CloudProvider for LocalFs {
     type Error = Error;
 
-    type UploadFuture<'a, A: 'a> = impl 'a + Future<Output = Result<Key, Self::Error>>;
-
     fn upload<'a, A: AsyncRead + Unpin + 'a>(
         &'a self,
         mut archive: A,
-    ) -> Self::UploadFuture<'a, A> {
-        async move {
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Key, Self::Error>>>> {
+        Box::pin(async move {
             let name = uuid::Uuid::new_v4();
             let name = name.to_hyphenated_ref().to_string();
             let path = self.root.join(&name);
@@ -43,26 +42,28 @@ impl CloudProvider for LocalFs {
                 }
                 file.write_all(&buf[..len]).await.context(IoFailed)?;
             }
-        }
+        })
     }
 
-    type DeleteFuture<'a> = impl 'a + Future<Output = Result<(), Self::Error>>;
-
-    fn delete(&self, key: Key) -> Self::DeleteFuture<'_> {
-        async move {
+    fn delete<'a>(
+        &'a self,
+        key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<(), Self::Error>>>> {
+        Box::pin(async move {
             let path = self.root.join(&key.0);
             tokio::fs::remove_file(path).await.context(IoFailed)
-        }
+        })
     }
 
     type DownloadReader<'a> = impl 'a + AsyncRead;
-    type DownloadFuture<'a> =
-        impl 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>;
-    fn download(&self, key: Key) -> Self::DownloadFuture<'_> {
-        async move {
+    fn download<'a>(
+        &'a self,
+        key: Key,
+    ) -> Pin<Box<dyn 'a + Future<Output = Result<Self::DownloadReader<'a>, Self::Error>>>> {
+        Box::pin(async move {
             let path = self.root.join(&key.0);
             let file = tokio::fs::File::open(path).await.context(IoFailed)?;
             Ok(file)
-        }
+        })
     }
 }
