@@ -12,7 +12,7 @@ impl<OutputSize: ArrayLength<u8>> From<GenericArray<u8, OutputSize>> for Checksu
     fn from(fin: GenericArray<u8, OutputSize>) -> Checksum {
         let mut arr = [0; LENGTH];
         let min_length = LENGTH.min(fin.len());
-        (&mut arr[..min_length]).copy_from_slice(&fin[..min_length]);
+        arr[..min_length].copy_from_slice(&fin[..min_length]);
         Checksum(arr)
     }
 }

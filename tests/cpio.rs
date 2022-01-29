@@ -41,7 +41,7 @@ where
     assert_eq!(&expected[0..=1], [0xC7, 0x71]);
 
     // Zero out c_dev. In our format that field stores higher bits of inode.
-    (&mut buffer[2..=3]).copy_from_slice(&[0, 0]);
+    buffer[2..=3].copy_from_slice(&[0, 0]);
 }
 
 #[tokio::test]
